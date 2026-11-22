@@ -27,13 +27,17 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
-      - uses: android-actions/setup-android@v3
-
       - name: Install Android SDK parts
         run: |
-          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "platform-tools" > /dev/null
-          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          # The runner ships the SDK; only cmdline-tools' bin is off PATH, and
+          # android-actions/setup-android@v3 fails at the long-removed "tools" package.
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -name sdkmanager -type f | sort -V | tail -n1)"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "platform-tools" > /dev/null
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$SDK/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
       - name: Build the APK (release)
         run: PROFILE=release ./packaging/android/build_apk.sh

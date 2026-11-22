@@ -104,6 +104,11 @@ fn android_main(app: AndroidApp) {
         log::info!("Horizon: settings from the development server: {remote_env:?}");
     }
     log::info!("Horizon {} (Android) home {}", crash::version(), home.display());
+    // Phone VR: the phone's own sensors drive the head, SBS on the screen
+    // (docs/phonevr/PLAN.md); without the flag the game stays flat.
+    if std::env::var("HORIZON_PHONEVR").as_deref() == Ok("1") {
+        horizon_phonevr::start();
+    }
     // Development: the derived pack made on the device beside the installed one (vr-env.txt).
     if std::env::var("HORIZON_DERIVE_TEST").as_deref() == Ok("1") {
         let home = home.clone();

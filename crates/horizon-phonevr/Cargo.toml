@@ -1,0 +1,16 @@
+[package]
+name = "horizon-phonevr"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "VR on the phone itself: the phone's sensors drive the in-game head, SBS stereo on the screen"
+publish = false
+
+[dependencies]
+
+[target.'cfg(target_os = "android")'.dependencies]
+log = "0.4"
+glam = "0.30"
+
+[lints]
+workspace = true

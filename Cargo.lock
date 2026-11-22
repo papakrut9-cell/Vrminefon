@@ -1549,6 +1549,7 @@ dependencies = [
  "horizon-narrator",
  "horizon-native-abi",
  "horizon-optifine",
+ "horizon-phonevr",
  "horizon-protocol",
  "horizon-server-files",
  "horizon-shader-api",
@@ -1888,6 +1889,14 @@ dependencies = [
  "horizon-core",
  "log",
  "regex",
+]
+
+[[package]]
+name = "horizon-phonevr"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "log",
 ]
 
 [[package]]
