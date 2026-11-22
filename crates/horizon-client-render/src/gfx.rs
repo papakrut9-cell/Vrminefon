@@ -1077,6 +1077,10 @@ pub struct Renderer {
     spare_surface: std::sync::Mutex<Option<wgpu::Surface<'static>>>,
     /// The offscreen colour target, sized like `config`.
     offscreen: Option<wgpu::Texture>,
+    /// Phone VR (`HORIZON_PHONEVR`, docs/phonevr/PLAN.md): the window's swapchain
+    /// configuration, which presents the two eyes' halves; the eye draws at `config`'s
+    /// size, half the window's, into `offscreen`.
+    phone: Option<PhoneVr>,
     /// VR: the eye being drawn (and the view culling covers both eyes with), set by
     /// `render_xr` around each eye's frame.
     xr_view: Option<ViewSet>,
@@ -2701,7 +2705,7 @@ impl Renderer {
         crate::graphics::suggest_reduced_far_detail(crate::graphics::lod_capped(&info));
         let size = window.inner_size();
         let max_side = device.limits().max_texture_dimension_2d;
-        let (config, present_modes, hdr_output) = if let Some(surface) = &surface {
+        let (mut config, present_modes, mut hdr_output) = if let Some(surface) = &surface {
             let mut config = surface
                 .get_default_config(
                     &adapter,
@@ -2791,7 +2795,7 @@ impl Renderer {
             }
             (config, Vec::new(), hdr_output)
         };
-        let offscreen = surface
+        let mut offscreen = surface
             .is_none()
             .then(|| Self::offscreen_target(&device, &config));
         let wide_ok = draws_wide_frame(
@@ -2816,6 +2820,12 @@ impl Renderer {
             config.format,
             linear,
         );
+        // Phone VR (HORIZON_PHONEVR, docs/phonevr/PLAN.md): each eye draws at half the
+        // window's width into the offscreen target; the swapchain shows the two halves.
+        let phone = phone_vr_frame(&mut config, &mut hdr_output, frame_format);
+        if phone.is_some() {
+            offscreen = Some(Self::offscreen_target(&device, &config));
+        }
         let msaa = pick_msaa(&adapter, frame_format);
         MSAA_SAMPLES.store(msaa, std::sync::atomic::Ordering::Relaxed);
         // The sample count the pipeline helpers below build with: 1, then `msaa` for the
@@ -4986,6 +4996,7 @@ impl Renderer {
             surface: surface.map(Arc::new),
             spare_surface: std::sync::Mutex::new(None),
             offscreen,
+            phone,
             xr_view: None,
             xr_eye_fov: None,
             xr_snapshot: None,
@@ -5411,7 +5422,8 @@ impl Renderer {
     /// Reattach a window after surface loss or a failed renderer replacement.
     pub fn recreate_surface(&mut self) -> Result<()> {
         self.queue.wait();
-        if self.offscreen.is_some() {
+        // Phone VR still presents to the window: its rebuild goes through.
+        if self.offscreen.is_some() && self.phone.is_none() {
             return Ok(());
         }
         // The surface set aside for a replacement that failed, else a new one
@@ -5497,6 +5509,9 @@ impl Renderer {
         };
         if self.config.present_mode != mode && self.surface.is_some() {
             self.config.present_mode = mode;
+            if let Some(phone) = &mut self.phone {
+                phone.window.present_mode = mode;
+            }
             self.configure_surface();
         }
     }
@@ -5506,6 +5521,14 @@ impl Renderer {
         // VR: frames are the eyes' size whatever the window does.
         #[cfg(target_os = "android")]
         let [width, height] = horizon_xr::eye_size().unwrap_or([width, height]);
+        // Phone VR: the eye keeps half the window's width (`phone` holds the window's).
+        let width = if let Some(phone) = &mut self.phone {
+            phone.window.width = width;
+            phone.window.height = height;
+            width / 2
+        } else {
+            width
+        };
         let max = self.device.limits().max_texture_dimension_2d;
         self.suspended = !drawable_size(width, height, max);
         if self.suspended {
@@ -5515,6 +5538,9 @@ impl Renderer {
         self.config.height = height;
         if self.surface.is_some() {
             self.configure_surface();
+            if self.phone.is_some() {
+                self.offscreen = Some(Self::offscreen_target(&self.device, &self.config));
+            }
         } else {
             self.offscreen = Some(Self::offscreen_target(&self.device, &self.config));
         }
@@ -6760,6 +6786,10 @@ impl Renderer {
     /// The swapchain's configuration: `config` (what every pipeline draws in), or
     /// HDR10 or scRGB while HDR output is on.
     fn surface_config(&self) -> wgpu::SurfaceConfiguration {
+        if let Some(phone) = &self.phone {
+            // Phone VR: the window's own swapchain at the window's size.
+            return phone.window.clone();
+        }
         let mut config = self.config.clone();
         if let Some(hdr) = &self.hdr {
             config.format = hdr.output.format();
@@ -7687,6 +7717,9 @@ impl Renderer {
         if horizon_xr::active() {
             return self.render_xr(frame);
         }
+        if self.phone.is_some() {
+            return self.render_phone(frame);
+        }
         if let Some(fov) = fake_xr_fov() {
             return self.render_fake_xr(frame, fov);
         }
@@ -7719,6 +7752,113 @@ impl Renderer {
         self.xr_view = None;
         self.xr_eyes = None;
         self.xr_eye = 0;
+        drawn
+    }
+    /// Phone VR (`HORIZON_PHONEVR`, docs/phonevr/PLAN.md): draws each eye into the
+    /// offscreen frame from the camera's yaw and pitch (the phone's sensors turn the
+    /// camera, the game's `xr_look`), then copies the halves side by side onto the
+    /// window, which Cardboard-style glasses see in 3D.
+    fn render_phone(&mut self, frame: &Frame) -> Result<bool> {
+        if self.device_lost() {
+            return Err("the graphics device was lost".into());
+        }
+        // A hid surface (the app in the background): nothing to present on.
+        let Some(surface) = self.surface.take() else {
+            return Ok(false);
+        };
+        self.frame_gen.stop();
+        let mut stale = false;
+        let texture = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f) => f,
+            wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
+                stale = true;
+                f
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                self.surface = Some(surface);
+                self.configure_surface();
+                return Ok(false);
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                self.surface = Some(surface);
+                self.recreate_surface()?;
+                return Ok(false);
+            }
+            // Timeout and Occluded skip a frame; a caught validation error gets a fresh
+            // configuration the next frame tries, like `draw_frame`.
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Occluded
+            | wgpu::CurrentSurfaceTexture::Validation => {
+                self.surface = Some(surface);
+                return Ok(false);
+            }
+        };
+        let eye_w = texture.texture.width().min(self.config.width * 2) / 2;
+        let eye_h = texture.texture.height().min(self.config.height);
+        // The flat game's vertical field of view through each eye's own lens, stretched
+        // to the eye's shape; the lenses' edges' tangents (left, right, up, down).
+        let tan_y = (frame.fov_degrees * 0.5).to_radians().tan();
+        let ar = eye_w.max(1) as f32 / eye_h.max(1) as f32;
+        let fov = [-tan_y * ar, tan_y * ar, tan_y, -tan_y];
+        let far = frame.depth_far;
+        // The camera's yaw and pitch as the flat game looks (`render_fake_xr`), the
+        // eyes' offsets from it on the world's X through it.
+        let rotation = glam::Quat::from_rotation_y(std::f32::consts::PI - frame.yaw.to_radians())
+            * glam::Quat::from_rotation_x(-frame.pitch.to_radians());
+        let cull = eye_view(rotation, Vec3::ZERO, fov.map(|t| t * 1.15), far);
+        let eyes = [
+            (rotation * Vec3::new(-0.032, 0.0, 0.0), fov),
+            (rotation * Vec3::new(0.032, 0.0, 0.0), [-fov[1], -fov[0], fov[2], fov[3]]),
+        ];
+        self.stereo_drawn = false;
+        let mut drawn = Ok(false);
+        for (i, (offset, lens)) in eyes.into_iter().enumerate() {
+            self.xr_eye = i;
+            self.xr_eye_fov = Some(lens);
+            self.xr_view = Some(ViewSet::with_cull(eye_view(rotation, offset, lens, far), cull));
+            drawn = self.render_screen(frame);
+            let Some(target) = matches!(drawn, Ok(true)).then(|| self.offscreen.clone()).flatten()
+            else {
+                break;
+            };
+            // The eye's half onto its side of the window's SBS picture.
+            let mut copies = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Horizon phone VR"),
+                });
+            copies.copy_texture_to_texture(
+                target.as_image_copy(),
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: i as u32 * eye_w,
+                        y: 0,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: eye_w,
+                    height: eye_h,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.queue.submit([copies.finish()]);
+        }
+        self.xr_view = None;
+        self.xr_eye_fov = None;
+        self.xr_eye = 0;
+        self.surface = Some(surface);
+        if self.config.present_mode == wgpu::PresentMode::Fifo {
+            self.window.pre_present_notify();
+        }
+        // The picture goes out whether it drew or not, so the swapchain does not stall.
+        self.queue.present(texture);
+        if stale {
+            self.configure_surface();
+        }
         drawn
     }
     /// VR: waits for the headset's frame, draws `frame` once per eye and hands each
@@ -13036,6 +13176,49 @@ fn fake_xr_fov() -> Option<[f32; 4]> {
             _ => [-1.07, 0.81, 0.93, -1.14],
         })
     })
+}
+
+/// Phone VR (`HORIZON_PHONEVR`, docs/phonevr/PLAN.md): the window's swapchain
+/// configuration, which presents the two eyes' halves; the eye draws at `config`'s
+/// size, half the window's, into the offscreen target.
+struct PhoneVr {
+    window: wgpu::SurfaceConfiguration,
+}
+
+/// Phone VR's setup, or none where the game stays flat: takes the eye's share out of
+/// `config` (whose format the eye draws in), and HDR output with it, whose picture
+/// draws in another format than the plain copy onto the window needs.
+fn phone_vr_frame(
+    config: &mut wgpu::SurfaceConfiguration,
+    hdr_output: &mut Option<hdr::Output>,
+    frame_format: wgpu::TextureFormat,
+) -> Option<PhoneVr> {
+    if std::env::var("HORIZON_PHONEVR").as_deref() != Ok("1") {
+        return None;
+    }
+    let presentable = config.usage.contains(wgpu::TextureUsages::COPY_DST);
+    // The eye's target is the swapchain's format; a 16-bit frame (HDR Lighting,
+    // Smooth Gradients, a linear pack) would not copy onto the halves byte by byte.
+    let plain = frame_format == config.format;
+    if !plain && hdr_output.is_some() {
+        crate::graphics::offer_hdr(false);
+    }
+    if !presentable || !plain || config.width < 4 {
+        log::warn!(
+            "Horizon renderer: Phone VR cannot draw here (presentable {presentable}, plain {plain}, {} wide); the game stays flat",
+            config.width
+        );
+        return None;
+    }
+    *hdr_output = None;
+    let window = config.clone();
+    config.width /= 2;
+    log::info!(
+        "Horizon renderer: Phone VR on, two eyes {}x{} side by side",
+        config.width,
+        config.height
+    );
+    Some(PhoneVr { window })
 }
 
 /// A view from the camera that sees everything either eye does, to cull with.

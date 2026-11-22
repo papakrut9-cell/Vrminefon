@@ -73,6 +73,14 @@ fn android_main(app: AndroidApp) {
             // SAFETY: still before the game starts its threads.
             unsafe { std::env::set_var("HORIZON_XR_MSAA", "off") };
         }
+        // Phone VR (no headset): `phonevr=1` picks the SBS picture, as the other
+        // lines above pick VR settings.
+        if text.lines().any(|l| l.trim() == "phonevr=1")
+            && std::env::var_os("HORIZON_PHONEVR").is_none()
+        {
+            // SAFETY: still before the game starts its threads.
+            unsafe { std::env::set_var("HORIZON_PHONEVR", "1") };
+        }
         for (key, var) in [("scale", "HORIZON_XR_SCALE"), ("hz", "HORIZON_XR_HZ")] {
             let value = text
                 .lines()

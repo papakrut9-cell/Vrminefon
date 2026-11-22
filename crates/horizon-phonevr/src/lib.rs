@@ -36,9 +36,8 @@ const MAX_ERRORS: u32 = 5;
 #[derive(Clone, Copy)]
 pub struct HeadPose {
     /// Turning from where the head was recentered to now, as the sensor's quaternion
-    /// (x, y, z, w) in the phone's sensor frame. The renderer turns this into the
-    /// camera view; the phone lies sideways in the glasses, so that rotation is a
-    /// landscape quarter turn the renderer folds in (later work).
+    /// (x, y, z, w) in the phone's sensor frame. The renderer folds the landscape
+    /// quarter turn in through [`view_rotation`].
     pub rotation: Quat,
     /// The sensor's accuracy field, radians (the game rotation vector reports none: 0).
     pub accuracy: f32,
@@ -54,6 +53,19 @@ struct State {
 
 static STATE: OnceLock<Mutex<State>> = OnceLock::new();
 static RUNNING: AtomicBool = AtomicBool::new(false);
+static TURN: OnceLock<i32> = OnceLock::new();
+
+/// How many quarter turns about the sensor's Z axis fold the head rotation into the
+/// landscape view: the phone lies sideways in the glasses, so its screen-up edge
+/// (sensor X) points along the world's up. Settable with `HORIZON_PHONEVR_TURN`.
+fn turn() -> i32 {
+    *TURN.get_or_init(|| {
+        std::env::var("HORIZON_PHONEVR_TURN")
+            .ok()
+            .and_then(|it| it.trim().parse::<i32>().ok())
+            .unwrap_or(-1)
+    })
+}
 
 /// Whether the phone-sensor head tracking has started. False without
 /// [`start`] (the flat game), or after the sensor gave up.
@@ -72,6 +84,14 @@ pub fn head() -> Option<HeadPose> {
         rotation: state.origin.conjugate() * rotation,
         accuracy,
     })
+}
+
+/// The latest head rotation in the renderer's frame, or none while the sensor is
+/// off: the sensor quaternion folded by the landscape quarter turn (see [`turn`]),
+/// with -Z forward and +Y up, ready to aim a camera with.
+pub fn view_rotation() -> Option<Quat> {
+    let fold = Quat::from_rotation_z((turn() as f32) * std::f32::consts::FRAC_PI_2);
+    head().map(|pose| pose.rotation * fold)
 }
 
 /// Make the current head pose "straight ahead".

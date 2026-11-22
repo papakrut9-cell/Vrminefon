@@ -1204,7 +1204,17 @@ impl super::Game<'_> {
         if snap != 0.0 && playing {
             self.yaw += snap;
         }
-        let Some((yaw, pitch)) = horizon_xr::look(self.yaw) else {
+        // The headset's head moves the camera, or on a plain phone (Phone VR,
+        // docs/phonevr/PLAN.md) its sensors do — in play only, so menus do not
+        // swing along with the phone.
+        let look = horizon_xr::look(self.yaw).or_else(|| {
+            let rotation = (!horizon_xr::active() && playing)
+                .then(horizon_phonevr::view_rotation)
+                .flatten()?;
+            let f = rotation * glam::Vec3::NEG_Z;
+            Some(((-f.x).atan2(f.z).to_degrees(), (-f.y).clamp(-1.0, 1.0).asin().to_degrees()))
+        });
+        let Some((yaw, pitch)) = look else {
             return;
         };
         let turn = [f64::from(yaw - self.yaw), f64::from(pitch - self.pitch)].map(|d| d / 0.15);
