@@ -447,11 +447,23 @@ const PREPARE_ASSETS: &str = "assets/horizon-prepare/";
 /// The app's internal files folder (`/data/data/<package>/files`): the shared storage under
 /// `Android/data` cannot hold code (mapping it executable fails), this folder can.
 fn internal_dir() -> Option<PathBuf> {
-    let cmdline = fs::read("/proc/self/cmdline").ok()?;
-    let name = String::from_utf8_lossy(cmdline.split(|b| *b == 0).next()?).into_owned();
-    let package = name.split(':').next()?.to_string();
-    let dir = PathBuf::from(format!("/data/data/{package}/files"));
-    dir.is_dir().then_some(dir)
+    // The process name is the activity's package (a setup worker process keeps the package
+    // under its `:name`); some devices only expose the user-scoped data path.
+    if let Ok(cmdline) = fs::read("/proc/self/cmdline") {
+        let name =
+            String::from_utf8_lossy(cmdline.split(|b| *b == 0).next().unwrap_or(b"")).into_owned();
+        let package = name.split(':').next().unwrap_or("");
+        for base in ["/data/data", "/data/user/0"] {
+            let dir = PathBuf::from(format!("{base}/{package}/files"));
+            if dir.is_dir() {
+                return Some(dir);
+            }
+        }
+    }
+    // The activity's own answer (getFilesDir()), which makes the folder when nothing made it.
+    let internal = crate::game::ANDROID_APP.get()?.internal_data_path()?;
+    let _ = fs::create_dir_all(&internal);
+    internal.is_dir().then_some(internal)
 }
 
 /// This app's APK: the runtime keeps it mapped (its dex and resources).
