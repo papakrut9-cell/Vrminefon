@@ -42,13 +42,12 @@ fi
 "$BT/aapt2" link -o "$OUT/unaligned.apk" --manifest "$MANIFEST" -I "$PLATFORM" \
   --min-sdk-version 26 --target-sdk-version 35 "$OUT/res/res.zip"
 python3 - "$OUT" <<'PY'
-import sys, zipfile
+import os, sys, zipfile
 out = sys.argv[1]
 with zipfile.ZipFile(f"{out}/unaligned.apk", "a", zipfile.ZIP_DEFLATED) as z:
     abi = os.environ.get("ABI", "arm64-v8a")
     z.write(f"{out}/java/classes.dex", "classes.dex")
     z.write(f"{out}/stage/lib/{abi}/libhorizon.so", f"lib/{abi}/libhorizon.so")
-    import os
     for extra in ("libopenxr_loader.so",):
         path = f"{out}/stage/lib/{abi}/{extra}"
         if os.path.exists(path):
