@@ -10,12 +10,16 @@ jobs:
   apk:
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64]
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: ${{ matrix.abi == 'arm64-v8a' && 'aarch64-linux-android' || 'x86_64-linux-android' }}
 
       - uses: Swatinem/rust-cache@v2
 
@@ -53,16 +57,26 @@ jobs:
             --libraries-dir game-files/libraries \
             --server-jar game-files/server.jar
 
+      - name: Pack the derived resources into the APK
+        run: |
+          # The same pack the on-device derive would make (android_setup.rs reads it from
+          # assets/horizon-derived.zip), so first start needs no Java run on the device.
+          prepared=$(ls -d .local/horizon-client/* | head -1)
+          ./packaging/android/make_derived_pack.sh "$prepared" apk-assets/horizon-derived.zip
+
       - name: Assemble the APK's on-device prepare assets
         run: |
           # Android arm64 Java 25 (OpenJDK, GPLv2 with the Classpath Exception) plus the
-          # NDK's libc++_shared.so, so the phone runs the exporters and makes its own
-          # derived pack on first start (crates/horizon-client/src/android_setup.rs).
-          mkdir -p apk-assets/horizon-jre
-          curl -fsSL https://github.com/AngelAuraMC/angelauramc-openjdk-build/releases/download/download/jre25-android-arm64.tar.xz \
-            | tar -xJf - -C apk-assets/horizon-jre
-          cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" \
-            apk-assets/horizon-jre/lib/
+          # NDK's libc++_shared.so, a fallback derive for phones without the pre-packed
+          # derived pack (crates/horizon-client/src/android_setup.rs); the x86_64 build
+          # (emulator) relies on the pack that ships inside the APK.
+          if [ "${{ matrix.abi }}" = arm64-v8a ]; then
+            mkdir -p apk-assets/horizon-jre
+            curl -fsSL https://github.com/AngelAuraMC/angelauramc-openjdk-build/releases/download/download/jre25-android-arm64.tar.xz \
+              | tar -xJf - -C apk-assets/horizon-jre
+            cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" \
+              apk-assets/horizon-jre/lib/
+          fi
           # The preparer's root: the lock, the exporters' Java sources and the exporter
           # classes this run compiled (the pinned jars never leave it).
           mkdir -p apk-assets/horizon-prepare/exporters apk-assets/horizon-prepare/mods/horizon/src/test/java
@@ -74,11 +88,12 @@ jobs:
       - name: Build the APK (release)
         env:
           HORIZON_APK_ASSETS: ${{ github.workspace }}/apk-assets
+          HORIZON_ABI: ${{ matrix.abi }}
         run: PROFILE=release ./packaging/android/build_apk.sh
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
         with:
-          name: horizon-phonevr-apk
+          name: horizon-phonevr-apk${{ matrix.abi == 'arm64-v8a' && '' || '-x86_64' }}
           path: target/android/horizon.apk
           if-no-files-found: error

@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Builds target/android/horizon.apk (arm64-v8a). Signed with $HORIZON_KEYSTORE if set, else the debug key. See ANDROID.md.
+# Builds target/android/horizon.apk (arm64-v8a by default; HORIZON_ABI=x86_64 for an emulator
+# build). Signed with $HORIZON_KEYSTORE if set, else the debug key. See ANDROID.md.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 : "${ANDROID_HOME:?set ANDROID_HOME to the Android SDK}"
+ABI="${HORIZON_ABI:-arm64-v8a}"
+export ABI
 NDK="${ANDROID_NDK_HOME:-$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -n1)}"
 export ANDROID_NDK_HOME="$NDK"
 BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)"
@@ -10,13 +13,13 @@ PLATFORM="$ANDROID_HOME/platforms/android-35/android.jar"
 PROFILE="${PROFILE:-fast}"
 OUT=target/android
 rm -rf "$OUT/stage" && mkdir -p "$OUT/stage/lib"
-cargo ndk -t arm64-v8a -P 26 -o "$OUT/jni" build -p horizon-android --profile "$PROFILE" ${CARGO_FLAGS:-}
-mkdir -p "$OUT/stage/lib/arm64-v8a"
-"$NDK"/toolchains/llvm/prebuilt/*/bin/llvm-strip -o "$OUT/stage/lib/arm64-v8a/libhorizon.so" "$OUT/jni/arm64-v8a/libhorizon.so"
+cargo ndk -t "$ABI" -P 26 -o "$OUT/jni" build -p horizon-android --profile "$PROFILE" ${CARGO_FLAGS:-}
+mkdir -p "$OUT/stage/lib/$ABI"
+"$NDK"/toolchains/llvm/prebuilt/*/bin/llvm-strip -o "$OUT/stage/lib/$ABI/libhorizon.so" "$OUT/jni/$ABI/libhorizon.so"
 # VR: the Khronos OpenXR loader (org.khronos.openxr:openxr_loader_for_android), when
 # OPENXR_LOADER names its arm64 libopenxr_loader.so. Without it the game starts flat.
 if [ -n "${OPENXR_LOADER:-}" ]; then
-  cp "$OPENXR_LOADER" "$OUT/stage/lib/arm64-v8a/libopenxr_loader.so"
+  cp "$OPENXR_LOADER" "$OUT/stage/lib/$ABI/libopenxr_loader.so"
 fi
 # HorizonActivity (the soft keyboard bridge) -> classes.dex.
 rm -rf "$OUT/java" && mkdir -p "$OUT/java/classes" "$OUT/java/src/dev/horizonlab/horizon"
@@ -42,16 +45,17 @@ python3 - "$OUT" <<'PY'
 import sys, zipfile
 out = sys.argv[1]
 with zipfile.ZipFile(f"{out}/unaligned.apk", "a", zipfile.ZIP_DEFLATED) as z:
+    abi = os.environ.get("ABI", "arm64-v8a")
     z.write(f"{out}/java/classes.dex", "classes.dex")
-    z.write(f"{out}/stage/lib/arm64-v8a/libhorizon.so", "lib/arm64-v8a/libhorizon.so")
+    z.write(f"{out}/stage/lib/{abi}/libhorizon.so", f"lib/{abi}/libhorizon.so")
     import os
     for extra in ("libopenxr_loader.so",):
-        path = f"{out}/stage/lib/arm64-v8a/{extra}"
+        path = f"{out}/stage/lib/{abi}/{extra}"
         if os.path.exists(path):
-            z.write(path, f"lib/arm64-v8a/{extra}")
+            z.write(path, f"lib/{abi}/{extra}")
     # On-device preparation (android_setup.rs): HORIZON_APK_ASSETS holds horizon-jre/ (a Java
-    # runtime for Android) and horizon-prepare/ (research-lock.json, the exporters' sources
-    # and classes), shipped as assets/ for the first start to unpack.
+    # runtime for Android), horizon-prepare/ (research-lock.json, the exporters' sources and
+    # classes) and horizon-derived.zip (a ready derived pack), shipped as assets/.
     assets = os.environ.get("HORIZON_APK_ASSETS", "")
     if assets:
         for top in ("horizon-jre", "horizon-prepare"):
@@ -59,6 +63,9 @@ with zipfile.ZipFile(f"{out}/unaligned.apk", "a", zipfile.ZIP_DEFLATED) as z:
                 for f in sorted(files):
                     path = os.path.join(d, f)
                     z.write(path, "assets/" + os.path.relpath(path, assets).replace(os.sep, "/"))
+        derived = os.path.join(assets, "horizon-derived.zip")
+        if os.path.isfile(derived):
+            z.write(derived, "assets/horizon-derived.zip")
 PY
 "$BT/zipalign" -f -p 4 "$OUT/unaligned.apk" "$OUT/aligned.apk"
 if [ -n "${HORIZON_KEYSTORE:-}" ] && [ -f "$HORIZON_KEYSTORE" ]; then

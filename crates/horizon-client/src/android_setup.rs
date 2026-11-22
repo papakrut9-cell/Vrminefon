@@ -355,6 +355,10 @@ fn run(home: &Path, derived: &str) -> Result<(), String> {
     let local = home.join("horizon-derived.zip");
     let pack = if local.is_file() {
         local
+    } else if let Some(apk) = apk_path().filter(|apk| has_asset(apk, DERIVED_ASSET)) {
+        // The CI build ships a ready derived pack: copy it out of the APK, no Java run needed.
+        apk_entry(&apk, DERIVED_ASSET, &work.join("derived.zip"))?;
+        work.join("derived.zip")
     } else {
         let url = derived.trim();
         if url.is_empty() {
@@ -443,6 +447,7 @@ fn run(home: &Path, derived: &str) -> Result<(), String> {
 /// Where the APK ships the Java runtime and the preparer's root (packaging/android/build_apk.sh).
 const JRE_ASSETS: &str = "assets/horizon-jre/";
 const PREPARE_ASSETS: &str = "assets/horizon-prepare/";
+const DERIVED_ASSET: &str = "assets/horizon-derived.zip";
 
 /// The app's internal files folder (`/data/data/<package>/files`): the shared storage under
 /// `Android/data` cannot hold code (mapping it executable fails), this folder can.
@@ -473,6 +478,19 @@ fn apk_path() -> Option<PathBuf> {
         .filter_map(|line| line.split_whitespace().nth(5))
         .find(|path| path.ends_with("/base.apk"))
         .map(PathBuf::from)
+}
+
+/// Copies one whole APK entry (a derived pack shipped inside the APK) to `target`.
+fn apk_entry(apk: &Path, name: &str, target: &Path) -> Result<(), String> {
+    let file = fs::File::open(apk).map_err(|e| format!("{}: {e}", apk.display()))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let mut entry = zip.by_name(name).map_err(|e| e.to_string())?;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut out = fs::File::create(target).map_err(|e| format!("{}: {e}", target.display()))?;
+    std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn has_asset(apk: &Path, prefix: &str) -> bool {
