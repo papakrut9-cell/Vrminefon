@@ -94,6 +94,6 @@ jobs:
       - name: Upload the APK
         uses: actions/upload-artifact@v4
         with:
-          name: horizon-phonevr-apk${{ matrix.abi == 'arm64-v8a' && '' || '-x86_64' }}
+          name: horizon-phonevr-apk-${{ matrix.abi }}
           path: target/android/horizon.apk
           if-no-files-found: error
