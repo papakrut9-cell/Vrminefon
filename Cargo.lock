@@ -1442,6 +1442,7 @@ dependencies = [
  "horizon-items",
  "horizon-mods",
  "horizon-native-abi",
+ "horizon-phonevr",
  "horizon-prepare",
  "horizon-protocol",
  "horizon-server-files",
