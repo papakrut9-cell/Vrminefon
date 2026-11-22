@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 25
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
@@ -39,7 +39,41 @@ jobs:
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$SDK/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
+      - name: Build the preparer
+        run: cargo build --release --locked -p horizon-prepare
+
+      - name: Download Mojang's pinned game files
+        run: ./packaging/android/fetch_game_files.sh game-files
+
+      - name: Prepare (compiles Horizon's Java exporters; only our classes leave)
+        run: |
+          target/release/horizon-prepare --prepare --root "$PWD" \
+            --version-json game-files/version.json \
+            --client-jar game-files/client.jar \
+            --libraries-dir game-files/libraries \
+            --server-jar game-files/server.jar
+
+      - name: Assemble the APK's on-device prepare assets
+        run: |
+          # Android arm64 Java 25 (OpenJDK, GPLv2 with the Classpath Exception) plus the
+          # NDK's libc++_shared.so, so the phone runs the exporters and makes its own
+          # derived pack on first start (crates/horizon-client/src/android_setup.rs).
+          mkdir -p apk-assets/horizon-jre
+          curl -fsSL https://github.com/AngelAuraMC/angelauramc-openjdk-build/releases/download/download/jre25-android-arm64.tar.xz \
+            | tar -xJf - -C apk-assets/horizon-jre
+          cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" \
+            apk-assets/horizon-jre/lib/
+          # The preparer's root: the lock, the exporters' Java sources and the exporter
+          # classes this run compiled (the pinned jars never leave it).
+          mkdir -p apk-assets/horizon-prepare/exporters apk-assets/horizon-prepare/mods/horizon/src/test/java
+          bundle=$(target/release/horizon-prepare compile-exporters --root "$PWD" | tail -1)
+          cp -R "$bundle"/server "$bundle"/client "$bundle"/manifest.json apk-assets/horizon-prepare/exporters/
+          cp -R mods/horizon/src/test/java/dev apk-assets/horizon-prepare/mods/horizon/src/test/java/
+          cp research-lock.json apk-assets/horizon-prepare/
+
       - name: Build the APK (release)
+        env:
+          HORIZON_APK_ASSETS: ${{ github.workspace }}/apk-assets
         run: PROFILE=release ./packaging/android/build_apk.sh
 
       - name: Upload the APK

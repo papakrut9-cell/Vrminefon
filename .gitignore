@@ -1,4 +1,6 @@
 /.local/
+/game-files/
+/apk-assets/
 /target/
 **/__pycache__/
 *.py[cod]
