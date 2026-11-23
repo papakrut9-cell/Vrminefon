@@ -13,14 +13,17 @@ cargo install cargo-ndk
 # Android SDK: cmdline-tools, then
 sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "platform-tools"
 export ANDROID_HOME=~/android/sdk            # NDK: the newest under $ANDROID_HOME/ndk, or ANDROID_NDK_HOME
-./packaging/android/build_apk.sh             # -> target/android/horizon.apk (debug-signed)
+./packaging/android/build_apk.sh             # -> target/android/horizon.apk (project-key signed)
 PROFILE=release ./packaging/android/build_apk.sh   # slower build, faster game
 CARGO_FLAGS="--features mods" ./packaging/android/build_apk.sh   # wasm code mods (untested on Android)
 ```
 
 The script runs `cargo ndk` (API 26, arm64-v8a), strips the library, links the manifest
-(`packaging/android/AndroidManifest.xml`) with `aapt2`, zipaligns and signs with
-`~/.android/debug.keystore` (created if missing; password `android`). No Gradle.
+(`packaging/android/AndroidManifest.xml`) with `aapt2`, zipaligns and signs with the
+committed project key (`packaging/android/horizon.keystore`, alias `horizon`, password
+`horizon-vr-key` — public on purpose, for a same-signed update every build). Set
+`HORIZON_KEYSTORE` (+ `HORIZON_KEYSTORE_PASS`) to sign with your own key instead; a
+debug key only when no project key is present. No Gradle.
 
 ## Install
 

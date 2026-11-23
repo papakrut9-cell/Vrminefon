@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="dev.horizonlab.horizon"
-    android:versionCode="80"
+    android:versionCode="81"
     android:versionName="1.0.0">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -35,8 +35,8 @@
         <activity
             android:name=".SetupActivity"
             android:exported="true"
-            android:screenOrientation="sensorLandscape"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|smallestScreenSize">
+            android:screenOrientation="fullUser"
+            android:configChanges="keyboardHidden|keyboard|navigation|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -56,8 +56,8 @@
             android:name=".ProfileActivity"
             android:exported="false"
             android:theme="@style/HorizonProfile"
-            android:screenOrientation="sensorLandscape"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|smallestScreenSize"
+            android:screenOrientation="fullUser"
+            android:configChanges="keyboardHidden|keyboard|navigation|uiMode"
             android:windowSoftInputMode="adjustPan|stateHidden" />
         <activity
             android:name=".MsaLoginActivity"

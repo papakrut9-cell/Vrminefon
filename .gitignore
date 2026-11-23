@@ -41,6 +41,8 @@
 # Android release signing keys: never commit.
 *.jks
 *.keystore
+# ...but the project's own public key (see ANDROID.md): same-signed updates.
+!packaging/android/horizon.keystore
 .horizon-keys/
 /mods/hello-android/target/
 /mods/hello-android/Cargo.lock

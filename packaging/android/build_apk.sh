@@ -71,6 +71,12 @@ if [ -n "${HORIZON_KEYSTORE:-}" ] && [ -f "$HORIZON_KEYSTORE" ]; then
   : "${HORIZON_KEYSTORE_PASS:?set HORIZON_KEYSTORE_PASS for $HORIZON_KEYSTORE}"
   SIGN=(--ks "$HORIZON_KEYSTORE" --ks-pass env:HORIZON_KEYSTORE_PASS --key-pass env:HORIZON_KEYSTORE_PASS)
   [ -n "${HORIZON_KEY_ALIAS:-}" ] && SIGN+=(--ks-key-alias "$HORIZON_KEY_ALIAS")
+elif [ -f packaging/android/horizon.keystore ]; then
+  # The committed project key: every build signs the same way, so a new APK
+  # updates over the installed one (no uninstall, no re-download of the game).
+  # Public on purpose; never reuse it for anything that must prove identity.
+  echo "Signing with the committed project key (packaging/android/horizon.keystore)" >&2
+  SIGN=(--ks packaging/android/horizon.keystore --ks-pass pass:horizon-vr-key --key-pass pass:horizon-vr-key --ks-key-alias horizon)
 else
   echo "HORIZON_KEYSTORE not set: signing with the debug key" >&2
   KS="$HOME/.android/debug.keystore"
