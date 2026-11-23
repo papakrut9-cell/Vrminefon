@@ -7,10 +7,8 @@ description = "VR on the phone itself: the phone's sensors drive the in-game hea
 publish = false
 
 [dependencies]
-
-[target.'cfg(target_os = "android")'.dependencies]
-log = "0.4"
 glam = "0.30"
+log = "0.4"
 
 [lints]
 workspace = true

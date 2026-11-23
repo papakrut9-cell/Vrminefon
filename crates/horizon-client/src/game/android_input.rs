@@ -1218,7 +1218,13 @@ impl super::Game<'_> {
                 .then(horizon_phonevr::view_rotation)
                 .flatten()?;
             let f = rotation * glam::Vec3::NEG_Z;
-            Some(((-f.x).atan2(f.z).to_degrees(), (-f.y).clamp(-1.0, 1.0).asin().to_degrees()))
+            // The turn since the recenter, pulled out of the quaternion the nearest
+            // way about: an atan2's cut at reading ±180 is a plain turn, not a spin.
+            let turn = f.x.atan2(-f.z).to_degrees();
+            Some((
+                self.yaw + turn,
+                (-f.y).clamp(-1.0, 1.0).asin().to_degrees(),
+            ))
         });
         let Some((yaw, pitch)) = look else {
             return;
