@@ -256,10 +256,12 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         final Button scaleButton = Ui.button(this, "", false);
         final Button boostButton = Ui.button(this, "", false);
         final Button warpButton = Ui.button(this, "", false);
+        final Button phonevrButton = Ui.button(this, "", false);
         final boolean[] pace = {vrSetting("pace", 1) != 0};
         msaaOn = vrSetting("msaa", 1) != 0;
         boostOn = vrSetting("boost", 1) != 0;
         warpOn = vrSetting("spacewarp", 1) != 0;
+        phonevrOn = vrSetting("phonevr", 0) != 0;
         vrScale = vrSetting("scale", 0);
         // One mode, Quality: a sharp image with the chunks it can draw smoothly. Applied once
         // (the game's options can still be changed in the game afterwards).
@@ -278,6 +280,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 scaleButton.setText(String.format(java.util.Locale.ROOT, Ui.t("Разрешение: %.2fx", "Resolution: %.2fx"), vrScale));
                 boostButton.setText(Ui.t("Ускорение: ", "Performance boost: ") + (boostOn ? "On" : "Off"));
                 warpButton.setText("SpaceWarp: " + (warpOn ? "On" : "Off"));
+                phonevrButton.setText(Ui.t("Телефон VR: ", "Phone VR: ") + (phonevrOn ? "On" : "Off"));
                 summary.setText(String.format(java.util.Locale.ROOT,
                         "Quality · %.2fx · 72 Hz · 6 chunks · anisotropic 8x%s", vrScale, msaaOn ? " · MSAA 4x" : ""));
             }
@@ -341,6 +344,13 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 showVr.run();
             }
         });
+        phonevrButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                phonevrOn = !phonevrOn;
+                saveVr(vrScale, 72, pace[0]);
+                showVr.run();
+            }
+        });
         card.addView(scaleButton, Ui.gap(this, 6));
         card.addView(Ui.text(this, Ui.t(
                 "Разрешение: выше — резче, но меньше кадров.",
@@ -358,6 +368,11 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 12, Ui.MUTED, false));
         card.addView(paceButton, Ui.gap(this, 6));
         card.addView(msaaButton, Ui.gap(this, 6));
+        card.addView(phonevrButton, Ui.gap(this, 6));
+        card.addView(Ui.text(this, Ui.t(
+                "Телефон VR: игра рисует два глаза бок о бок (очки Cardboard), голова — от гироскопа телефона. Нужна для игры в VR на самом телефоне; выключите, чтобы играть на шлеме.",
+                "Phone VR: the screen shows both eyes side by side (Cardboard glasses), the head comes from the phone's gyroscope. For playing VR on the phone itself; turn it off to play on a headset."),
+                12, Ui.MUTED, false));
         card.addView(Ui.text(this, Ui.t(
                 "MSAA сглаживает края блоков вдали. Если игра не запускается или тормозит, выключите его.",
                 "MSAA smooths the shimmering edges of far blocks. If the game does not start or runs slowly, turn it off."),
@@ -844,7 +859,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             scale = 1.0f; hz = 72; distance = 9; simulation = 8; clouds = "\"fast\""; particles = "0"; biome = 2; entities = "1.0";
         }
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=4\n", mode, scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\nphonevr=%d\npreset=4\n", mode, scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0, phonevrOn ? 1 : 0));
         } catch (Exception ignored) {
         }
         java.util.LinkedHashMap<String, String> set = new java.util.LinkedHashMap<>();
@@ -888,6 +903,8 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
 
     /** The headset's CPU and GPU at their highest clocks (horizon-vr.txt `boost=`). */
     private boolean boostOn = true;
+    /** Phone VR (horizon-vr.txt `phonevr=`): two eyes side by side on the phone's screen. */
+    private boolean phonevrOn = false;
     /** The eyes' resolution (horizon-vr.txt `scale=`). */
     private float vrScale = 1.3f;
 
@@ -898,7 +915,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
 
     private void saveVr(float scale, int hz, boolean pace) {
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=4\n", scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\nphonevr=%d\npreset=4\n", scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0, phonevrOn ? 1 : 0));
         } catch (Exception ignored) {
         }
     }

@@ -1206,7 +1206,13 @@ impl super::Game<'_> {
         }
         // The headset's head moves the camera, or on a plain phone (Phone VR,
         // docs/phonevr/PLAN.md) its sensors do — in play only, so menus do not
-        // swing along with the phone.
+        // swing along with the phone. Recentered as play starts, like Vivecraft:
+        // sit down facing the screen, then the game puts straight ahead there.
+        static WERE_PLAYING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let were = WERE_PLAYING.swap(playing, std::sync::atomic::Ordering::Relaxed);
+        if playing && !were {
+            horizon_phonevr::recenter();
+        }
         let look = horizon_xr::look(self.yaw).or_else(|| {
             let rotation = (!horizon_xr::active() && playing)
                 .then(horizon_phonevr::view_rotation)

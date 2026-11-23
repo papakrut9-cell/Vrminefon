@@ -38,6 +38,9 @@ SBS-стерео, голова управляется гироскопом те�
   или строка `phonevr=1` в `horizon-vr.txt`; четверть-поворот ландшафта правится
   `HORIZON_PHONEVR_TURN` (по умолчанию -1).
 - Переключение: `HORIZON_PHONEVR=1`; иначе игра ведёт себя как плоская.
+- Готово (как в Vivecraft/Boardcraft-VR): тумблер «Телефон VR» в настройках лаунчера
+  (`ProfileActivity`, карточка VR settings) — пишет `phonevr=` в `horizon-vr.txt`; голова
+  центрируется заново при входе в игру (`recenter()` по фронту `playing` в `xr_look`).
 
 ### Фаза B — Joy-Con как контроллеры
 - Joy-Con парсятся Android'ом как отдельные HID-геймпады (Android 11+).
