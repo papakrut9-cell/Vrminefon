@@ -294,7 +294,8 @@ impl Game<'_> {
             }
             // A mod (Entity Culling) can hide the tags of entities wholly behind blocks.
             if self.prebuilt.asked.hide_occluded_name_tags
-                && self.occluded_camera_bounds((lo - camera).as_vec3(), (hi - camera).as_vec3()) {
+                && self.occluded_camera_bounds((lo - camera).as_vec3(), (hi - camera).as_vec3())
+            {
                 self.count_cull(1);
                 continue;
             }

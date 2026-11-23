@@ -54,6 +54,10 @@ mod advancements_screen;
 mod agent;
 mod agent_settings;
 mod allays;
+#[cfg(target_os = "android")]
+mod android_ime;
+#[cfg(target_os = "android")]
+mod android_input;
 mod armor_stands;
 mod atlas_slots;
 mod attachment_sync;
@@ -174,7 +178,6 @@ mod key_focus;
 mod lan;
 mod lan_actions;
 mod lan_attributes;
-mod local_skin;
 mod lan_camera;
 mod lan_chat;
 mod lan_crafting;
@@ -198,6 +201,7 @@ mod level_particles;
 mod levels;
 mod lightning;
 mod llamas;
+mod local_skin;
 mod locator_bar;
 mod loom;
 mod mace;
@@ -253,8 +257,6 @@ mod native_item_container;
 mod native_item_energy;
 mod native_item_fluids;
 mod native_level_refs;
-mod prebuilt_mods;
-mod sdk_mods;
 mod native_lifecycle;
 mod native_living_refs;
 mod native_machines;
@@ -305,11 +307,6 @@ mod ordered_tick;
 mod packs;
 mod pad;
 mod pad_actions;
-#[cfg(target_os = "android")]
-mod android_ime;
-#[cfg(target_os = "android")]
-mod android_input;
-mod touch;
 mod pad_menu;
 mod paintings;
 mod pandas;
@@ -326,6 +323,7 @@ mod postprocess;
 mod potent_sulfur;
 mod potions;
 mod powder_snow;
+mod prebuilt_mods;
 mod prediction;
 mod pumpkin;
 mod pvp;
@@ -355,6 +353,7 @@ mod screen_info;
 mod screens;
 mod sculk;
 mod sculk_fixture;
+mod sdk_mods;
 mod server_links;
 mod server_packs;
 mod server_travel;
@@ -398,6 +397,7 @@ mod tick_script;
 mod titles;
 mod tnt;
 mod totem;
+mod touch;
 mod trading;
 mod transient_blocks;
 mod trial_spawner;
@@ -15131,7 +15131,11 @@ impl Game<'_> {
             };
         // VR: a bow goes to the right hand (held in the off hand too), the left one draws
         // its string.
-        let is_bow = |i: usize| items[i].as_ref().is_some_and(|s| &*s.item == "minecraft:bow");
+        let is_bow = |i: usize| {
+            items[i]
+                .as_ref()
+                .is_some_and(|s| &*s.item == "minecraft:bow")
+        };
         let vr_bow = vr_hand_frame(false).is_some() && is_bow(1) && !is_bow(0);
         // VR: each arm's vertices, for the renderer to bring onto the frame's own poses
         // (`horizon_xr::hand_catch_up`).
@@ -15205,7 +15209,11 @@ impl Game<'_> {
             };
             // The main hand on its arm, the off hand on the other one (VR: the controller it
             // is drawn on, a bow on the left).
-            let left = if vr_frame.is_some() { vr_left } else { self.settings.main_hand_left != (hand == Hand::Off) };
+            let left = if vr_frame.is_some() {
+                vr_left
+            } else {
+                self.settings.main_hand_left != (hand == Hand::Off)
+            };
             // A Legacy sword held up hides the off hand's shield.
             if hand == Hand::Off && legacy_block {
                 continue;
@@ -15352,10 +15360,22 @@ impl Game<'_> {
             // Seeded by the player id plus the context ordinal.
             let (context, seed) = match (left, vr_frame.is_some()) {
                 // VR: held as another player holds it (`vr_held_item`), the same in either hand.
-                (true, true) => (horizon_assets::item_model::DisplayContext::ThirdPersonLeftHand, 3),
-                (false, true) => (horizon_assets::item_model::DisplayContext::ThirdPersonRightHand, 4),
-                (true, false) => (horizon_assets::item_model::DisplayContext::FirstPersonLeftHand, 3),
-                (false, false) => (horizon_assets::item_model::DisplayContext::FirstPersonRightHand, 4),
+                (true, true) => (
+                    horizon_assets::item_model::DisplayContext::ThirdPersonLeftHand,
+                    3,
+                ),
+                (false, true) => (
+                    horizon_assets::item_model::DisplayContext::ThirdPersonRightHand,
+                    4,
+                ),
+                (true, false) => (
+                    horizon_assets::item_model::DisplayContext::FirstPersonLeftHand,
+                    3,
+                ),
+                (false, false) => (
+                    horizon_assets::item_model::DisplayContext::FirstPersonRightHand,
+                    4,
+                ),
             };
             let cit_hand = if hand == Hand::Off {
                 horizon_client::cit::Hand::Off
@@ -17457,7 +17477,9 @@ impl Game<'_> {
             Some(renderer) => {
                 // VR development builds time the passes for the frame report.
                 // VR always times its passes: the headset's frame pacing reads them (`note_gpu_ms`).
-                renderer.set_pass_timing(debug_passes || self.gpu_passes || vr_dev_timing() || vr_active());
+                renderer.set_pass_timing(
+                    debug_passes || self.gpu_passes || vr_dev_timing() || vr_active(),
+                );
                 // `gpu_passes` is a measurement: it takes every sample it can.
                 renderer.set_pass_timing_gap(if self.gpu_passes {
                     Duration::ZERO
@@ -18714,7 +18736,8 @@ impl Game<'_> {
         self.trace_window_event(origin, &event);
         // Android's back button or gesture: Escape (close the screen, or pause).
         if let WindowEvent::KeyboardInput { event: key, .. } = &event
-            && key.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::BrowserBack)
+            && key.logical_key
+                == winit::keyboard::Key::Named(winit::keyboard::NamedKey::BrowserBack)
         {
             if key.state == ElementState::Pressed && !key.repeat {
                 self.touch_back();
@@ -20367,11 +20390,17 @@ impl Game<'_> {
 fn vr_hand_frame(left: bool) -> Option<glam::Mat4> {
     #[cfg(target_os = "android")]
     {
-        let hands = horizon_xr::active().then(horizon_xr::last_hands).flatten()?;
+        let hands = horizon_xr::active()
+            .then(horizon_xr::last_hands)
+            .flatten()?;
         use horizon_xr::Hand;
         // The hand at the grip; the arm along where the controller points (the handle
         // slants: along it, the arm hung down).
-        let (grip, aim) = if left { (Hand::LeftGrip, Hand::LeftAim) } else { (Hand::RightGrip, Hand::RightAim) };
+        let (grip, aim) = if left {
+            (Hand::LeftGrip, Hand::LeftAim)
+        } else {
+            (Hand::RightGrip, Hand::RightAim)
+        };
         let at = hands[grip as usize]?.offset;
         let along = hands[aim as usize]?.rotation;
         return Some(glam::Mat4::from_translation(at) * glam::Mat4::from_quat(along));
@@ -20393,7 +20422,9 @@ fn vr_set_hand_spans(spans: Vec<(u32, u32, bool)>) {
 
 /// VR: a held item with a blade or head that strikes: swords, tools, the trident and mace.
 fn vr_is_tool(name: &str) -> bool {
-    ["_sword", "_pickaxe", "_axe", "_shovel", "_hoe", "_spear"].iter().any(|t| name.ends_with(t))
+    ["_sword", "_pickaxe", "_axe", "_shovel", "_hoe", "_spear"]
+        .iter()
+        .any(|t| name.ends_with(t))
         || matches!(name, "minecraft:trident" | "minecraft:mace")
 }
 
@@ -20462,9 +20493,21 @@ fn vr_held_item(left: bool, scale: f32) -> glam::Mat4 {
 impl Game<'_> {
     /// VR: how big `item` is held: smaller for an item that is a block.
     fn vr_item_scale(&self, item: &str) -> f32 {
-        static BLOCKS: std::sync::OnceLock<std::collections::HashSet<String>> = std::sync::OnceLock::new();
-        let blocks = BLOCKS.get_or_init(|| self.res.facts().states.iter().map(|s| s.name.to_string()).collect());
-        if blocks.contains(item) { VR_BLOCK_SCALE } else { VR_ITEM_SCALE }
+        static BLOCKS: std::sync::OnceLock<std::collections::HashSet<String>> =
+            std::sync::OnceLock::new();
+        let blocks = BLOCKS.get_or_init(|| {
+            self.res
+                .facts()
+                .states
+                .iter()
+                .map(|s| s.name.to_string())
+                .collect()
+        });
+        if blocks.contains(item) {
+            VR_BLOCK_SCALE
+        } else {
+            VR_ITEM_SCALE
+        }
     }
 }
 
@@ -22905,7 +22948,10 @@ fn new_event_loop() -> std::result::Result<EventLoop<()>, winit::error::EventLoo
     #[cfg(target_os = "android")]
     {
         use winit::platform::android::EventLoopBuilderExtAndroid;
-        let app = ANDROID_APP.get().expect("android_main sets the activity").clone();
+        let app = ANDROID_APP
+            .get()
+            .expect("android_main sets the activity")
+            .clone();
         android_input::install();
         EventLoop::builder().with_android_app(app).build()
     }
@@ -22920,7 +22966,8 @@ pub static ANDROID_APP: std::sync::OnceLock<winit::platform::android::activity::
 
 /// The activity is stopped (Home or another app). The loop waits instead of spinning.
 #[cfg(target_os = "android")]
-static ANDROID_BACKGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ANDROID_BACKGROUND: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Quit Game ended the native loop. Ask the activity to die so the next launch
 /// is a new process, not a resumed black window.
@@ -23128,7 +23175,9 @@ impl Loading {
             let device_id = touch.device_id;
             let mut position = touch.location;
             match touch.phase {
-                TouchPhase::Started if self.touch_finger.is_none() => self.touch_finger = Some(touch.id),
+                TouchPhase::Started if self.touch_finger.is_none() => {
+                    self.touch_finger = Some(touch.id)
+                }
                 _ if self.touch_finger != Some(touch.id) => return,
                 TouchPhase::Ended | TouchPhase::Cancelled => self.touch_finger = None,
                 _ => {}

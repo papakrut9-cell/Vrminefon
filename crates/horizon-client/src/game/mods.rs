@@ -106,10 +106,18 @@ pub(super) fn content_root(
     // sounds) has it read from the same file, on with its code.
     let mut bundles: Vec<std::path::PathBuf> = Vec::new();
     if super::prebuilt_mods::ON {
-        for dir in [here.join(super::prebuilt_mods::DIR), here.join(mod_list::NATIVE_DIR)] {
+        for dir in [
+            here.join(super::prebuilt_mods::DIR),
+            here.join(mod_list::NATIVE_DIR),
+        ] {
             for p in horizon_mods::find(&dir) {
-                let native = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("hnmod"));
-                if native && Package::has_manifest(&p) && !bundles.iter().any(|b| b.file_name() == p.file_name()) {
+                let native = p
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("hnmod"));
+                if native
+                    && Package::has_manifest(&p)
+                    && !bundles.iter().any(|b| b.file_name() == p.file_name())
+                {
                     bundles.push(p);
                 }
             }
@@ -123,7 +131,11 @@ pub(super) fn content_root(
     let mut announced = Vec::new();
     for path in &paths {
         let bundle = bundles.contains(path);
-        let read = if bundle { Package::read_bundle_content(path) } else { Package::read(path) };
+        let read = if bundle {
+            Package::read_bundle_content(path)
+        } else {
+            Package::read(path)
+        };
         let Ok(package) = read else {
             continue;
         };

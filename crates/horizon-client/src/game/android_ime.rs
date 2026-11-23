@@ -13,7 +13,11 @@ pub(super) enum ImeInput {
 static QUEUE: Mutex<Vec<ImeInput>> = Mutex::new(Vec::new());
 
 pub(super) fn take() -> Vec<ImeInput> {
-    std::mem::take(&mut *QUEUE.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+    std::mem::take(
+        &mut *QUEUE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
 }
 
 fn push(input: ImeInput) {
@@ -56,7 +60,12 @@ pub(super) fn show(show: bool) {
         let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast())? };
         let mut env = vm.attach_current_thread_permanently()?;
         let activity = unsafe { jni::objects::JObject::from_raw(app.activity_as_ptr().cast()) };
-        env.call_method(&activity, "showKeyboard", "(Z)V", &[jni::objects::JValue::Bool(show.into())])?;
+        env.call_method(
+            &activity,
+            "showKeyboard",
+            "(Z)V",
+            &[jni::objects::JValue::Bool(show.into())],
+        )?;
         Ok(())
     })();
     if let Err(e) = result {
@@ -100,7 +109,12 @@ pub fn open_game_folder(dir: &std::path::Path) {
         let mut env = vm.attach_current_thread_permanently()?;
         let activity = unsafe { jni::objects::JObject::from_raw(app.activity_as_ptr().cast()) };
         let rel = env.new_string(rel)?;
-        env.call_method(&activity, "openGameFolder", "(Ljava/lang/String;)V", &[jni::objects::JValue::Object(&rel)])?;
+        env.call_method(
+            &activity,
+            "openGameFolder",
+            "(Ljava/lang/String;)V",
+            &[jni::objects::JValue::Object(&rel)],
+        )?;
         Ok(())
     })();
     if let Err(e) = result {
@@ -152,7 +166,12 @@ pub(super) fn pointer_capture(on: bool) {
         let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast())? };
         let mut env = vm.attach_current_thread_permanently()?;
         let activity = unsafe { jni::objects::JObject::from_raw(app.activity_as_ptr().cast()) };
-        env.call_method(&activity, "setPointerCapture", "(Z)V", &[jni::objects::JValue::Bool(on.into())])?;
+        env.call_method(
+            &activity,
+            "setPointerCapture",
+            "(Z)V",
+            &[jni::objects::JValue::Bool(on.into())],
+        )?;
         Ok(())
     })();
     if let Err(e) = result {

@@ -10,7 +10,9 @@
 //! touch controls can hide.
 use horizon_client::gamepad::{Button, PadState};
 use std::sync::Mutex;
-use winit::platform::android::activity::input::{Axis, InputEvent, KeyAction, Keycode, MotionAction};
+use winit::platform::android::activity::input::{
+    Axis, InputEvent, KeyAction, Keycode, MotionAction,
+};
 
 /// `InputDevice.SOURCE_*` bits.
 const SOURCE_KEYBOARD: u32 = 0x0000_0101;
@@ -80,7 +82,9 @@ static SHARED: Mutex<Shared> = Mutex::new(Shared {
 });
 
 fn shared() -> std::sync::MutexGuard<'static, Shared> {
-    SHARED.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    SHARED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Route input events through [`filter`]; called once before the event loop starts.
@@ -101,13 +105,19 @@ pub(super) fn pad_state() -> PadState {
             triggers[i] = 1.0;
         }
     }
-    let pad = PadState { buttons: s.keys | s.hat, left: s.left, right: [right[0], -right[1]], triggers };
+    let pad = PadState {
+        buttons: s.keys | s.hat,
+        left: s.left,
+        right: [right[0], -right[1]],
+        triggers,
+    };
     drop(s);
     let pad = match horizon_xr::pad() {
         Some(touch) => with_touch_controllers(pad, touch),
         None => pad,
     };
-    if pad.buttons != 0 || pad.left != [0.0; 2] || pad.right != [0.0; 2] || pad.triggers != [0.0; 2] {
+    if pad.buttons != 0 || pad.left != [0.0; 2] || pad.right != [0.0; 2] || pad.triggers != [0.0; 2]
+    {
         horizon_xr::note_input(horizon_xr::InputKind::PadHeld);
     }
     pad
@@ -155,31 +165,53 @@ fn with_touch_controllers(mut pad: PadState, touch: horizon_xr::Pad) -> PadState
         let (sin, cos) = turn.sin_cos();
         let (x, z) = (-touch.left[0], touch.left[1]);
         let (x, z) = (x * cos - z * sin, x * sin + z * cos);
-        horizon_xr::Pad { left: [-x, z], ..touch }
+        horizon_xr::Pad {
+            left: [-x, z],
+            ..touch
+        }
     };
     // Over the wrist's hotbar, the right trigger picks a slot (`xr_look`), not the pad; with
     // a bow it draws the string (`xr_bow`).
     let touch = if BOW_STRING_LEFT.load(std::sync::atomic::Ordering::Relaxed) {
         // A bow: the left trigger draws it (`xr_bow`); neither uses nor attacks.
-        horizon_xr::Pad { triggers: [0.0; 2], ..touch }
+        horizon_xr::Pad {
+            triggers: [0.0; 2],
+            ..touch
+        }
     } else if horizon_xr::wrist_slot().is_some()
         || BOW_HELD.load(std::sync::atomic::Ordering::Relaxed)
     {
-        horizon_xr::Pad { triggers: [touch.triggers[0], 0.0], ..touch }
+        horizon_xr::Pad {
+            triggers: [touch.triggers[0], 0.0],
+            ..touch
+        }
     } else {
         touch
     };
     // In a menu the triggers click where their controllers point (`xr_pointer`), not the
     // pad, and the right stick scrolls there.
     let touch = if horizon_xr::menu_open() {
-        horizon_xr::Pad { triggers: [0.0; 2], right: [0.0; 2], ..touch }
+        horizon_xr::Pad {
+            triggers: [0.0; 2],
+            right: [0.0; 2],
+            ..touch
+        }
     } else {
         touch
     };
-    let stronger = |a: [f32; 2], b: [f32; 2]| if b[0].hypot(b[1]) > a[0].hypot(a[1]) { b } else { a };
+    let stronger = |a: [f32; 2], b: [f32; 2]| {
+        if b[0].hypot(b[1]) > a[0].hypot(a[1]) {
+            b
+        } else {
+            a
+        }
+    };
     pad.left = stronger(pad.left, touch.left);
     pad.right = stronger(pad.right, touch.right);
-    pad.triggers = [pad.triggers[0].max(touch.triggers[0]), pad.triggers[1].max(touch.triggers[1])];
+    pad.triggers = [
+        pad.triggers[0].max(touch.triggers[0]),
+        pad.triggers[1].max(touch.triggers[1]),
+    ];
     pad
 }
 
@@ -249,7 +281,10 @@ pub(super) fn defer_boat_turn(degrees: f32) -> bool {
     if !horizon_xr::active() {
         return false;
     }
-    BOAT_TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).0 += degrees;
+    BOAT_TURN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .0 += degrees;
     true
 }
 
@@ -266,7 +301,10 @@ fn sample(samples: &mut Samples, now: std::time::Instant, at: glam::Vec3) {
 
 /// Vivecraft's `averageSpeed`: the way the point made over the last `window` seconds, per second.
 fn average_speed(samples: &Samples, now: std::time::Instant, window: f32) -> f32 {
-    let recent: Vec<_> = samples.iter().filter(|(t, _)| now.duration_since(*t).as_secs_f32() <= window).collect();
+    let recent: Vec<_> = samples
+        .iter()
+        .filter(|(t, _)| now.duration_since(*t).as_secs_f32() <= window)
+        .collect();
     let (Some(first), Some(last)) = (recent.first(), recent.last()) else {
         return 0.0;
     };
@@ -274,13 +312,21 @@ fn average_speed(samples: &Samples, now: std::time::Instant, window: f32) -> f32
     if span < 0.05 {
         return 0.0;
     }
-    recent.windows(2).map(|p| p[1].1.distance(p[0].1)).sum::<f32>() / span
+    recent
+        .windows(2)
+        .map(|p| p[1].1.distance(p[0].1))
+        .sum::<f32>()
+        / span
 }
 
 /// Vivecraft's `averagePosition`: where the point was on average over the last `window` seconds.
 fn average_position(samples: &Samples, now: std::time::Instant, window: f32) -> Option<glam::Vec3> {
-    let recent: Vec<_> = samples.iter().filter(|(t, _)| now.duration_since(*t).as_secs_f32() <= window).collect();
-    (!recent.is_empty()).then(|| recent.iter().map(|(_, p)| *p).sum::<glam::Vec3>() / recent.len() as f32)
+    let recent: Vec<_> = samples
+        .iter()
+        .filter(|(t, _)| now.duration_since(*t).as_secs_f32() <= window)
+        .collect();
+    (!recent.is_empty())
+        .then(|| recent.iter().map(|(_, p)| *p).sum::<glam::Vec3>() / recent.len() as f32)
 }
 
 /// VR: the right hand this frame (`Game::xr_right_swing`).
@@ -395,7 +441,13 @@ fn filter(event: &InputEvent<'_>) -> bool {
                 || has(source, SOURCE_JOYSTICK)
                 || is_gamepad_key(code)
                 || (source == SOURCE_DPAD
-                    && matches!(code, Keycode::DpadUp | Keycode::DpadDown | Keycode::DpadLeft | Keycode::DpadRight));
+                    && matches!(
+                        code,
+                        Keycode::DpadUp
+                            | Keycode::DpadDown
+                            | Keycode::DpadLeft
+                            | Keycode::DpadRight
+                    ));
             if from_pad {
                 horizon_xr::note_input(horizon_xr::InputKind::AndroidKey);
                 let Some(button) = pad_button(code) else {
@@ -418,9 +470,7 @@ fn filter(event: &InputEvent<'_>) -> bool {
             }
             // A hardware keyboard's Esc: close the
             // screen or pause, as the touch back does.
-            if has(source, SOURCE_KEYBOARD)
-                && !has(source, SOURCE_MOUSE)
-                && code == Keycode::Escape
+            if has(source, SOURCE_KEYBOARD) && !has(source, SOURCE_MOUSE) && code == Keycode::Escape
             {
                 let mut s = shared();
                 s.keyboard_used = true;
@@ -430,7 +480,15 @@ fn filter(event: &InputEvent<'_>) -> bool {
                 return true;
             }
             if has(source, SOURCE_KEYBOARD)
-                && !matches!(code, Keycode::Back | Keycode::Home | Keycode::VolumeUp | Keycode::VolumeDown | Keycode::VolumeMute | Keycode::Power)
+                && !matches!(
+                    code,
+                    Keycode::Back
+                        | Keycode::Home
+                        | Keycode::VolumeUp
+                        | Keycode::VolumeDown
+                        | Keycode::VolumeMute
+                        | Keycode::Power
+                )
             {
                 shared().keyboard_used = true;
             }
@@ -446,7 +504,11 @@ fn filter(event: &InputEvent<'_>) -> bool {
                 let p = motion.pointer_at_index(0);
                 let a = |axis| {
                     let v = p.axis_value(axis);
-                    if v.is_finite() { v.clamp(-1.0, 1.0) } else { 0.0 }
+                    if v.is_finite() {
+                        v.clamp(-1.0, 1.0)
+                    } else {
+                        0.0
+                    }
                 };
                 let mut s = shared();
                 s.left = [a(Axis::X), -a(Axis::Y)];
@@ -455,7 +517,10 @@ fn filter(event: &InputEvent<'_>) -> bool {
                 if s.rx_ry[0].abs() > 0.3 || s.rx_ry[1].abs() > 0.3 {
                     s.rx_ry_stick = true;
                 }
-                let (lt, rt) = (a(Axis::Ltrigger).max(a(Axis::Brake)), a(Axis::Rtrigger).max(a(Axis::Gas)));
+                let (lt, rt) = (
+                    a(Axis::Ltrigger).max(a(Axis::Brake)),
+                    a(Axis::Rtrigger).max(a(Axis::Gas)),
+                );
                 if lt > 0.05 || rt > 0.05 {
                     s.trigger_axes = true;
                 }
@@ -489,14 +554,18 @@ fn filter(event: &InputEvent<'_>) -> bool {
                         s.mouse.push(MouseInput::Wheel(w));
                     }
                 }
-                MotionAction::Move | MotionAction::HoverMove | MotionAction::Down | MotionAction::Up => {
+                MotionAction::Move
+                | MotionAction::HoverMove
+                | MotionAction::Down
+                | MotionAction::Up => {
                     if relative {
                         let d = [f64::from(p.x()), f64::from(p.y())];
                         if d != [0.0, 0.0] {
                             s.mouse.push(MouseInput::Delta(d));
                         }
                     } else {
-                        s.mouse.push(MouseInput::Move([f64::from(p.x()), f64::from(p.y())]));
+                        s.mouse
+                            .push(MouseInput::Move([f64::from(p.x()), f64::from(p.y())]));
                     }
                 }
                 _ => {}
@@ -549,16 +618,24 @@ impl super::Game<'_> {
         let now = Instant::now();
         let eye = self.eye_position()?;
         let pose = horizon_xr::last_hands()?[horizon_xr::Hand::RightAim as usize]?;
-        let (rotation, position) = horizon_xr::room_hand_poses()?[horizon_xr::Hand::RightAim as usize]?;
-        let mut tip = TIP.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (rotation, position) =
+            horizon_xr::room_hand_poses()?[horizon_xr::Hand::RightAim as usize]?;
+        let mut tip = TIP
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         sample(&mut tip, now, position + rotation * glam::Vec3::NEG_Z * 0.3);
         let speed = average_speed(&tip, now, 0.33);
         let along = pose.rotation * glam::Vec3::NEG_Z;
         let hand = [0, 1, 2].map(|i| eye[i] + f64::from(pose.offset[i]));
         let dir = [0, 1, 2].map(|i| f64::from(along[i]));
-        let mut ways = WAY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut ways = WAY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         sample(&mut ways, now, pose.offset + along * 0.3);
-        let recent: Vec<_> = ways.iter().filter(|(t, _)| now.duration_since(*t).as_secs_f32() <= 0.33).collect();
+        let recent: Vec<_> = ways
+            .iter()
+            .filter(|(t, _)| now.duration_since(*t).as_secs_f32() <= 0.33)
+            .collect();
         let way = recent
             .first()
             .zip(recent.last())
@@ -570,7 +647,8 @@ impl super::Game<'_> {
             });
         let item = self.visible_hand_items()[0].clone();
         let name = item.as_ref().map_or("", |s| &*s.item);
-        let sword = name.ends_with("_sword") || name.ends_with("_spear") || name == "minecraft:trident";
+        let sword =
+            name.ends_with("_sword") || name.ends_with("_spear") || name == "minecraft:trident";
         // Vivecraft's: the player's entity reach (3) less the arm's half metre.
         let reach = 2.5;
         let (weapon, entity_add) = if sword {
@@ -582,7 +660,15 @@ impl super::Game<'_> {
         } else {
             (0.0, 0.3)
         };
-        Some(XrSwing { hand, dir, weapon, entity_reach: weapon + entity_add, speed, sword, way })
+        Some(XrSwing {
+            hand,
+            dir,
+            weapon,
+            entity_reach: weapon + entity_add,
+            speed,
+            sword,
+            way,
+        })
     }
     /// VR: our own gestures for what Vivecraft has none for, measured the same way as its
     /// swing (`XrSwing`: over 2.5 m/s, the hand's own speed in the room). One per stroke: the
@@ -604,7 +690,9 @@ impl super::Game<'_> {
         static TRIDENT: AtomicBool = AtomicBool::new(false);
         static CAST: Mutex<Option<String>> = Mutex::new(None);
         let now = Instant::now();
-        let held = *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let held = *TARGET
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((until, at)) = held
             && now < until
         {
@@ -613,14 +701,19 @@ impl super::Game<'_> {
         }
         THROWING.store(TRIDENT.load(Ordering::Relaxed), Ordering::Relaxed);
         let playing = self.screen == super::Screen::Playing && self.title.is_none();
-        let name = self.visible_hand_items()[0].as_ref().map(|s| s.item.to_string()).filter(|_| playing);
+        let name = self.visible_hand_items()[0]
+            .as_ref()
+            .map(|s| s.item.to_string())
+            .filter(|_| playing);
         let kind = Self::xr_thrown_kind(name.as_deref());
         if TRIDENT.load(Ordering::Relaxed) && kind != Some(Thrown::Trident) {
             TRIDENT.store(false, Ordering::Relaxed);
             shared().mouse.push(MouseInput::Button(1, false));
         }
         // The rod's line is out until a reel, or another item.
-        let mut cast = CAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut cast = CAST
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if kind != Some(Thrown::Rod) {
             *cast = None;
         }
@@ -631,10 +724,14 @@ impl super::Game<'_> {
         // How much the stroke goes away from the head (1 straight away, -1 straight back).
         let out = [0, 1, 2].map(|i| swing.hand[i] - eye[i]);
         let far = out.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-3);
-        let outward = swing.way.map_or(0.0, |way| (0..3).map(|i| way[i] * out[i]).sum::<f64>() / far);
+        let outward = swing.way.map_or(0.0, |way| {
+            (0..3).map(|i| way[i] * out[i]).sum::<f64>() / far
+        });
         let stroke = swing.speed > 2.5 && ARMED.load(Ordering::Relaxed);
         let mut s = shared();
-        let target = swing.way.map(|way| [0, 1, 2].map(|i| eye[i] + way[i] * 10.0));
+        let target = swing
+            .way
+            .map(|way| [0, 1, 2].map(|i| eye[i] + way[i] * 10.0));
         match kind {
             Thrown::Trident => {
                 let hand = horizon_xr::last_hands()?[horizon_xr::Hand::RightGrip as usize]?.offset;
@@ -654,7 +751,9 @@ impl super::Game<'_> {
                 s.mouse.push(MouseInput::Button(1, false));
                 ARMED.store(false, Ordering::Relaxed);
                 let target = target.filter(|_| thrown)?;
-                *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                *TARGET
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
                     Some((now + Duration::from_millis(150), target));
                 Some(target)
             }
@@ -670,7 +769,9 @@ impl super::Game<'_> {
                 s.mouse.push(MouseInput::Button(1, true));
                 s.mouse.push(MouseInput::Button(1, false));
                 let target = target.filter(|_| throw)?;
-                *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                *TARGET
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
                     Some((now + Duration::from_millis(150), target));
                 Some(target)
             }
@@ -680,7 +781,9 @@ impl super::Game<'_> {
                 }
                 let target = target?;
                 ARMED.store(false, Ordering::Relaxed);
-                *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                *TARGET
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
                     Some((now + Duration::from_millis(150), target));
                 THROWING.store(true, Ordering::Relaxed);
                 s.mouse.push(MouseInput::Button(1, true));
@@ -716,13 +819,17 @@ impl super::Game<'_> {
         static TARGET: Mutex<Option<(Instant, [f64; 3])>> = Mutex::new(None);
         static LAST: Mutex<(Vec<u32>, Option<[f64; 3]>)> = Mutex::new((Vec::new(), None));
         let now = Instant::now();
-        let held = *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let held = *TARGET
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((until, at)) = held
             && now < until
         {
             return Some(at);
         }
-        let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut last = LAST
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let playing = self.screen == super::Screen::Playing && self.title.is_none();
         let Some(swing) = swing.filter(|_| playing) else {
             *last = (Vec::new(), None);
@@ -731,7 +838,10 @@ impl super::Game<'_> {
         let length = self
             .clip_ray(swing.hand, swing.dir, swing.entity_reach)
             .map_or(swing.entity_reach, |hit| {
-                (0..3).map(|i| (hit.point[i] - swing.hand[i]).powi(2)).sum::<f64>().sqrt()
+                (0..3)
+                    .map(|i| (hit.point[i] - swing.hand[i]).powi(2))
+                    .sum::<f64>()
+                    .sqrt()
             });
         let tip = [0, 1, 2].map(|i| swing.hand[i] + swing.dir[i] * length);
         // The box from the hand to the tip, and to the last tip for a fast swing.
@@ -756,14 +866,26 @@ impl super::Game<'_> {
             .map(|m| {
                 let b = m.hitbox();
                 let (a, z) = (b.min_position(), b.max_position());
-                (m.id, [(a.x + z.x) / 2.0, (a.y + z.y) / 2.0, (a.z + z.z) / 2.0])
+                (
+                    m.id,
+                    [(a.x + z.x) / 2.0, (a.y + z.y) / 2.0, (a.z + z.z) / 2.0],
+                )
             })
             .collect();
         let fast = swing.speed > threshold;
-        let target = inside.iter().find(|(id, _)| fast && !last.0.contains(id)).map(|&(_, at)| at);
-        last.0 = if fast { inside.iter().map(|&(id, _)| id).collect() } else { Vec::new() };
+        let target = inside
+            .iter()
+            .find(|(id, _)| fast && !last.0.contains(id))
+            .map(|&(_, at)| at);
+        last.0 = if fast {
+            inside.iter().map(|&(id, _)| id).collect()
+        } else {
+            Vec::new()
+        };
         let target = target?;
-        *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+        *TARGET
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some((now + Duration::from_millis(150), target));
         let mut s = shared();
         s.mouse.push(MouseInput::Button(0, true));
@@ -788,8 +910,12 @@ impl super::Game<'_> {
         let now = Instant::now();
         let playing = self.screen == super::Screen::Playing && self.title.is_none();
         let mut s = shared();
-        let mut mining = MINING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut point = POINT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut mining = MINING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut point = POINT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(swing) = swing.filter(|_| playing) else {
             mining.take();
             *point = (None, false);
@@ -801,18 +927,30 @@ impl super::Game<'_> {
         // Eating and drinking, either hand.
         let items = self.visible_hand_items();
         let hands = horizon_xr::last_hands();
-        let mut food = FOOD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut food = FOOD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut edible = false;
-        for (i, hand) in [(0, horizon_xr::Hand::RightAim), (1, horizon_xr::Hand::LeftAim)] {
+        for (i, hand) in [
+            (0, horizon_xr::Hand::RightAim),
+            (1, horizon_xr::Hand::LeftAim),
+        ] {
             let kind = items[i].as_ref().and_then(|stack| {
                 let components = self
                     .pack
                     .item_renderer
                     .models
                     .components(&horizon_client::item_render::stack_view(stack));
-                let drink = matches!(&*stack.item, "minecraft:potion" | "minecraft:milk_bucket" | "minecraft:honey_bottle" | "minecraft:ominous_bottle");
-                (components.get("minecraft:consumable").is_some() || components.get("minecraft:food").is_some())
-                    .then_some(drink)
+                let drink = matches!(
+                    &*stack.item,
+                    "minecraft:potion"
+                        | "minecraft:milk_bucket"
+                        | "minecraft:honey_bottle"
+                        | "minecraft:ominous_bottle"
+                );
+                (components.get("minecraft:consumable").is_some()
+                    || components.get("minecraft:food").is_some())
+                .then_some(drink)
             });
             let pose = hands.and_then(|h| h[hand as usize]);
             let (Some(drink), Some(pose)) = (kind, pose) else {
@@ -829,9 +967,14 @@ impl super::Game<'_> {
             }
         }
         drop(food);
-        let mut start = EAT_START.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut start = EAT_START
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let eating = EATING.load(Ordering::Relaxed);
-        if eating && (!edible || start.is_some_and(|t| now.duration_since(t) > Duration::from_millis(2100))) {
+        if eating
+            && (!edible
+                || start.is_some_and(|t| now.duration_since(t) > Duration::from_millis(2100)))
+        {
             EATING.store(false, Ordering::Relaxed);
             s.mouse.push(MouseInput::Button(1, false));
         } else if !eating && edible {
@@ -845,15 +988,25 @@ impl super::Game<'_> {
         let solid = |b: [i32; 3]| {
             let state = self.world.block(b[0], b[1], b[2]);
             !self.res.facts().is_air(state)
-                && !matches!(&*self.res.facts().get(state).name, "minecraft:water" | "minecraft:lava" | "minecraft:bubble_column")
+                && !matches!(
+                    &*self.res.facts().get(state).name,
+                    "minecraft:water" | "minecraft:lava" | "minecraft:bubble_column"
+                )
         };
         let end = [0, 1, 2].map(|i| swing.hand[i] + swing.dir[i] * swing.weapon);
         let from = point.0.replace(end).unwrap_or(end);
-        let way = (0..3).map(|i| (end[i] - from[i]).powi(2)).sum::<f64>().sqrt();
+        let way = (0..3)
+            .map(|i| (end[i] - from[i]).powi(2))
+            .sum::<f64>()
+            .sqrt();
         let steps = (way / 0.02).ceil().max(1.0) as usize;
         let cell = |t: f64| [0, 1, 2].map(|i| (from[i] + (end[i] - from[i]) * t).floor() as i32);
         let entered = (!solid(cell(0.0)))
-            .then(|| (1..=steps).map(|k| cell(k as f64 / steps as f64)).find(|&b| solid(b)))
+            .then(|| {
+                (1..=steps)
+                    .map(|k| cell(k as f64 / steps as f64))
+                    .find(|&b| solid(b))
+            })
             .flatten();
         let threshold = if self.creative { 3.75 } else { 2.5 };
         let can_act = !edible && swing.speed > threshold && !point.1;
@@ -861,12 +1014,21 @@ impl super::Game<'_> {
         let block = entered.filter(|_| can_act);
         let block = block.filter(|&b| !swing.sword || self.destroy_progress(b) >= 1.0);
         // Vivecraft's `lastWeaponSolid`: set by a blow, cleared once the end is out again.
-        point.1 = if block.is_some() { true } else { point.1 && end_solid };
+        point.1 = if block.is_some() {
+            true
+        } else {
+            point.1 && end_solid
+        };
         if let Some(block) = block {
             let ticks = 3 + (swing.speed - threshold).clamp(0.0, 4.0) as u32;
-            *super::remote::VR_MINING_HOLD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            *super::remote::VR_MINING_HOLD
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
                 Some(now + Duration::from_secs(10));
-            super::remote::VR_BLOWS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(ticks);
+            super::remote::VR_BLOWS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(ticks);
             *mining = Some((block, now + Duration::from_millis(200)));
         }
         match *mining {
@@ -890,7 +1052,9 @@ impl super::Game<'_> {
         let now = Instant::now();
         let playing = self.screen == super::Screen::Playing && self.title.is_none();
         let room = horizon_xr::room_hands();
-        let mut hands = HANDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut hands = HANDS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for (i, hand) in [(0, Hand::LeftGrip), (1, Hand::RightGrip)] {
             match room.and_then(|r| r[hand as usize]) {
                 Some(p) => sample(&mut hands[i], now, p),
@@ -903,19 +1067,29 @@ impl super::Game<'_> {
         // item takes the use first).
         static SHIELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         let items = self.visible_hand_items();
-        let shield = |i: usize| items[i].as_ref().is_some_and(|s| &*s.item == "minecraft:shield");
+        let shield = |i: usize| {
+            items[i]
+                .as_ref()
+                .is_some_and(|s| &*s.item == "minecraft:shield")
+        };
         let free = items[0].as_ref().is_none_or(|s| super::vr_is_tool(&s.item));
         let was = SHIELD.load(std::sync::atomic::Ordering::Relaxed);
         let world = horizon_xr::last_hands();
-        let ahead = horizon_xr::head_look().map(|(_, _, f)| glam::Vec3::new(f.x, 0.0, f.z).normalize_or(glam::Vec3::NEG_Z));
+        let ahead = horizon_xr::head_look()
+            .map(|(_, _, f)| glam::Vec3::new(f.x, 0.0, f.z).normalize_or(glam::Vec3::NEG_Z));
         let raised = |hand: Hand| {
-            world.and_then(|h| h[hand as usize]).zip(ahead).is_some_and(|(p, ahead)| {
-                p.offset.y > if was { -0.45 } else { -0.35 } && p.offset.dot(ahead) > if was { 0.1 } else { 0.15 }
-            })
+            world
+                .and_then(|h| h[hand as usize])
+                .zip(ahead)
+                .is_some_and(|(p, ahead)| {
+                    p.offset.y > if was { -0.45 } else { -0.35 }
+                        && p.offset.dot(ahead) > if was { 0.1 } else { 0.15 }
+                })
         };
         let up = playing
             && !EATING.load(std::sync::atomic::Ordering::Relaxed)
-            && ((shield(0) && raised(Hand::RightGrip)) || (shield(1) && free && raised(Hand::LeftGrip)));
+            && ((shield(0) && raised(Hand::RightGrip))
+                || (shield(1) && free && raised(Hand::LeftGrip)));
         if up != was {
             SHIELD.store(up, std::sync::atomic::Ordering::Relaxed);
             shared().mouse.push(MouseInput::Button(1, up));
@@ -927,12 +1101,19 @@ impl super::Game<'_> {
             && !BOW_DRAWING.load(std::sync::atomic::Ordering::Relaxed);
         let oar = |i: usize| (average_speed(&hands[i], now, 0.5) - 0.5).clamp(0.0, 2.0);
         let (left, right) = (oar(0), oar(1));
-        let ahead = if left > 0.0 && right > 0.0 { (left + right) / 2.0 } else { 0.0 };
+        let ahead = if left > 0.0 && right > 0.0 {
+            (left + right) / 2.0
+        } else {
+            0.0
+        };
         let rowing = boat && left + right + ahead > 0.0;
         if rowing {
             // The boat's own input: ahead at Vivecraft's min(0.04, 0.06 × oars) of its 0.04,
             // a turn of (left − right) / 1.5 degrees a tick of its one.
-            self.pad.injected.left = [((left - right) / 1.5).clamp(-1.0, 1.0), (0.06 * ahead / 0.04).min(1.0)];
+            self.pad.injected.left = [
+                ((left - right) / 1.5).clamp(-1.0, 1.0),
+                (0.06 * ahead / 0.04).min(1.0),
+            ];
             ROWING.store(true, std::sync::atomic::Ordering::Relaxed);
         } else if ROWING.swap(false, std::sync::atomic::Ordering::Relaxed) {
             self.pad.injected.left = [0.0; 2];
@@ -946,12 +1127,21 @@ impl super::Game<'_> {
         use std::time::{Duration, Instant};
         static STATE: Mutex<(Option<Instant>, f64, [f64; 3])> = Mutex::new((None, 0.0, [0.0; 3]));
         let now = Instant::now();
-        let mut state = STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = STATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let playing = self.screen == super::Screen::Playing && self.title.is_none();
-        let wet = self.player.as_ref().is_some_and(|p| p.fluids.was_touching_water);
-        let still = horizon_xr::pad().is_none_or(|p| p.left[0].abs() < 0.1 && p.left[1].abs() < 0.1);
+        let wet = self
+            .player
+            .as_ref()
+            .is_some_and(|p| p.fluids.was_touching_water);
+        let still =
+            horizon_xr::pad().is_none_or(|p| p.left[0].abs() < 0.1 && p.left[1].abs() < 0.1);
         let hands = horizon_xr::last_hands().and_then(|h| {
-            Some((h[horizon_xr::Hand::LeftAim as usize]?, h[horizon_xr::Hand::RightAim as usize]?))
+            Some((
+                h[horizon_xr::Hand::LeftAim as usize]?,
+                h[horizon_xr::Hand::RightAim as usize]?,
+            ))
         });
         let (Some((left, right)), Some((_, _, forward))) = (hands, horizon_xr::head_look()) else {
             return;
@@ -961,14 +1151,18 @@ impl super::Game<'_> {
             return;
         }
         // Once a tick.
-        if state.0.is_some_and(|t| now.duration_since(t) < Duration::from_millis(50)) {
+        if state
+            .0
+            .is_some_and(|t| now.duration_since(t) < Duration::from_millis(50))
+        {
             return;
         }
         let first = state.0.replace(now).is_none();
         let middle = (left.offset + right.offset) * 0.5;
         let neck = glam::Vec3::new(0.0, -0.3, 0.0);
         let move_dir = ((middle - neck).normalize_or_zero() + forward) * 0.5;
-        let hands_dir = (left.rotation * glam::Vec3::NEG_Z + right.rotation * glam::Vec3::NEG_Z) * 0.5;
+        let hands_dir =
+            (left.rotation * glam::Vec3::NEG_Z + right.rotation * glam::Vec3::NEG_Z) * 0.5;
         let dir_factor = (hands_dir + move_dir).length() * 0.5;
         let distance = f64::from(neck.distance(middle));
         let delta = state.1 - distance;
@@ -1007,8 +1201,15 @@ impl super::Game<'_> {
         // right trigger squeezed with the left hand at it (within 30 cm) cocks it (use held
         // until it is loaded or the trigger is let go); loaded, the right trigger shoots
         // along the right hand.
-        let crossbow = playing && items[0].as_ref().is_some_and(|s| &*s.item == "minecraft:crossbow");
-        let loaded = crossbow && items[0].as_ref().and_then(|s| s.data()).is_some_and(|d| !d.charged.is_empty());
+        let crossbow = playing
+            && items[0]
+                .as_ref()
+                .is_some_and(|s| &*s.item == "minecraft:crossbow");
+        let loaded = crossbow
+            && items[0]
+                .as_ref()
+                .and_then(|s| s.data())
+                .is_some_and(|d| !d.charged.is_empty());
         let held = bow_held || crossbow;
         BOW_HELD.store(held, std::sync::atomic::Ordering::Relaxed);
         BOW_STRING_LEFT.store(bow_held && !crossbow, std::sync::atomic::Ordering::Relaxed);
@@ -1020,10 +1221,15 @@ impl super::Game<'_> {
             TRIGGER.store(false, std::sync::atomic::Ordering::Relaxed);
         }
         let hands = horizon_xr::last_hands().and_then(|h| {
-            Some((h[horizon_xr::Hand::LeftGrip as usize]?.offset, h[horizon_xr::Hand::RightGrip as usize]?.offset))
+            Some((
+                h[horizon_xr::Hand::LeftGrip as usize]?.offset,
+                h[horizon_xr::Hand::RightGrip as usize]?.offset,
+            ))
         });
         let eye = self.eye_position()?;
-        let mut bow = BOW.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut bow = BOW
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (left, right) = match hands {
             Some(h) if held => h,
             _ => {
@@ -1076,20 +1282,28 @@ impl super::Game<'_> {
     pub(super) fn xr_look(&mut self) {
         // A boat's turn (`defer_boat_turn`), a tick's worth over a tick's time.
         {
-            let mut turn = BOAT_TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut turn = BOAT_TURN
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let now = std::time::Instant::now();
             let dt = turn.1.map_or(0.0, |t| now.duration_since(t).as_secs_f32());
             turn.1 = Some(now);
             if self.riding.is_none() {
                 turn.0 = 0.0;
             } else if turn.0 != 0.0 {
-                let step = if turn.0.abs() < 0.01 { turn.0 } else { turn.0 * (dt / 0.05).min(1.0) };
+                let step = if turn.0.abs() < 0.01 {
+                    turn.0
+                } else {
+                    turn.0 * (dt / 0.05).min(1.0)
+                };
                 turn.0 -= step;
                 self.yaw += step;
             }
         }
         horizon_xr::set_menu(self.title.is_some() || self.screen != super::Screen::Playing);
-        *XR_HEAD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = self
+        *XR_HEAD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = self
             .player
             .as_ref()
             .map(|p| [p.position.x, p.position.y, p.position.z])
@@ -1102,17 +1316,24 @@ impl super::Game<'_> {
         // A thrown item or a rod in the hand throws (`xr_throw`) and neither hits nor mines; a
         // trident hits as a sword until it is raised to throw.
         let thrown = Self::xr_thrown_kind(self.visible_hand_items()[0].as_ref().map(|s| &*s.item));
-        let (swing, hand) = if bow.is_some() || BOW_HELD.load(std::sync::atomic::Ordering::Relaxed) {
+        let (swing, hand) = if bow.is_some() || BOW_HELD.load(std::sync::atomic::Ordering::Relaxed)
+        {
             (None, None)
         } else {
             let throw = self.xr_throw(tip);
-            if throw.is_some() || matches!(thrown, Some(Thrown::Item | Thrown::Rod)) || THROWING.load(std::sync::atomic::Ordering::Relaxed) {
+            if throw.is_some()
+                || matches!(thrown, Some(Thrown::Item | Thrown::Rod))
+                || THROWING.load(std::sync::atomic::Ordering::Relaxed)
+            {
                 (throw, self.xr_hand_actions(None))
             } else {
                 (self.xr_swing(tip), self.xr_hand_actions(tip))
             }
         };
-        GESTURE.store(swing.is_some() || hand.is_some(), std::sync::atomic::Ordering::Relaxed);
+        GESTURE.store(
+            swing.is_some() || hand.is_some(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         if let Some(at) = bow.or(swing).or(hand)
             && let Some(eye) = self.eye_position()
         {
@@ -1130,16 +1351,31 @@ impl super::Game<'_> {
         horizon_xr::note_controller_setting(self.settings.controller.enabled);
         // The hotbar on the left wrist: where it is in the HUD's image, and the slot the
         // right controller touches there.
-        let hotbar = self.renderer.as_ref().filter(|_| self.title.is_none()).map(|r| {
-            let scale = horizon_client::hud::HudBatch::new([r.config.width, r.config.height]).scale;
-            let (w, h) = (r.config.width as f32, r.config.height as f32);
-            let left = w / 2.0 - 91.0 * scale;
-            horizon_xr::Hotbar {
-                // Up to the held item's name above the bars (Gui's toolHighlight).
-                crop: [left - 2.0 * scale, h - 72.0 * scale, 186.0 * scale, 72.0 * scale],
-                slots: [left + 1.0 * scale, h - 22.0 * scale, 20.0 * scale, 22.0 * scale],
-            }
-        });
+        let hotbar = self
+            .renderer
+            .as_ref()
+            .filter(|_| self.title.is_none())
+            .map(|r| {
+                let scale =
+                    horizon_client::hud::HudBatch::new([r.config.width, r.config.height]).scale;
+                let (w, h) = (r.config.width as f32, r.config.height as f32);
+                let left = w / 2.0 - 91.0 * scale;
+                horizon_xr::Hotbar {
+                    // Up to the held item's name above the bars (Gui's toolHighlight).
+                    crop: [
+                        left - 2.0 * scale,
+                        h - 72.0 * scale,
+                        186.0 * scale,
+                        72.0 * scale,
+                    ],
+                    slots: [
+                        left + 1.0 * scale,
+                        h - 22.0 * scale,
+                        20.0 * scale,
+                        22.0 * scale,
+                    ],
+                }
+            });
         horizon_xr::set_hotbar(hotbar);
         // The slot the right controller is over on the wrist, picked when its trigger goes
         // down there (as QuestCraft does).
@@ -1160,12 +1396,18 @@ impl super::Game<'_> {
         // and the mob the player picks; the left hand's on the block along it.
         let aim = self.eye_position().and_then(|eye| {
             let hit = self.pick();
-            let face = hit.map(|hit| glam::Vec3::new(hit.face[0] as f32, hit.face[1] as f32, hit.face[2] as f32));
+            let face = hit.map(|hit| {
+                glam::Vec3::new(hit.face[0] as f32, hit.face[1] as f32, hit.face[2] as f32)
+            });
             let block = hit.map(|hit| hit.point);
             // mob_hit's point is from the mob's feet.
             let mob = self.mob_hit().map(|(i, _, at)| {
                 let feet = &self.mobs[i].position;
-                [feet.x as f64 + at[0], feet.y as f64 + at[1], feet.z as f64 + at[2]]
+                [
+                    feet.x as f64 + at[0],
+                    feet.y as f64 + at[1],
+                    feet.z as f64 + at[2],
+                ]
             });
             let distance = |p: &[f64; 3]| (0..3).map(|i| (p[i] - eye[i]).powi(2)).sum::<f64>();
             let (at, normal) = match (block, mob) {
@@ -1174,22 +1416,41 @@ impl super::Game<'_> {
                 (None, m) => (m?, None),
             };
             Some((
-                glam::Vec3::new((at[0] - eye[0]) as f32, (at[1] - eye[1]) as f32, (at[2] - eye[2]) as f32),
+                glam::Vec3::new(
+                    (at[0] - eye[0]) as f32,
+                    (at[1] - eye[1]) as f32,
+                    (at[2] - eye[2]) as f32,
+                ),
                 normal,
             ))
         });
-        let other = self.eye_position().zip(horizon_xr::hand_angles(!look_left)).and_then(|(eye, (yaw, pitch))| {
-            let dir = super::pick_view_vector(yaw, pitch);
-            let hit = self.clip_ray(eye, dir, self.block_reach)?;
-            let at = hit.point;
-            Some((
-                glam::Vec3::new((at[0] - eye[0]) as f32, (at[1] - eye[1]) as f32, (at[2] - eye[2]) as f32),
-                Some(glam::Vec3::new(hit.face[0] as f32, hit.face[1] as f32, hit.face[2] as f32)),
-            ))
-        });
+        let other = self
+            .eye_position()
+            .zip(horizon_xr::hand_angles(!look_left))
+            .and_then(|(eye, (yaw, pitch))| {
+                let dir = super::pick_view_vector(yaw, pitch);
+                let hit = self.clip_ray(eye, dir, self.block_reach)?;
+                let at = hit.point;
+                Some((
+                    glam::Vec3::new(
+                        (at[0] - eye[0]) as f32,
+                        (at[1] - eye[1]) as f32,
+                        (at[2] - eye[2]) as f32,
+                    ),
+                    Some(glam::Vec3::new(
+                        hit.face[0] as f32,
+                        hit.face[1] as f32,
+                        hit.face[2] as f32,
+                    )),
+                ))
+            });
         let aim = aim.filter(|_| playing);
         let other = other.filter(|_| playing);
-        horizon_xr::set_aim_points(if look_left { [aim, other] } else { [other, aim] });
+        horizon_xr::set_aim_points(if look_left {
+            [aim, other]
+        } else {
+            [other, aim]
+        });
         // Swimming and gliding go where the head looks, every way (up, down, sideways: the
         // left stick's click sprints into a swim, A in the air opens the elytra), and food
         // held at the mouth in water must not point the swim down.
@@ -1208,7 +1469,8 @@ impl super::Game<'_> {
         // docs/phonevr/PLAN.md) its sensors do — in play only, so menus do not
         // swing along with the phone. Recentered as play starts, like Vivecraft:
         // sit down facing the screen, then the game puts straight ahead there.
-        static WERE_PLAYING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        static WERE_PLAYING: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
         let were = WERE_PLAYING.swap(playing, std::sync::atomic::Ordering::Relaxed);
         if playing && !were {
             horizon_phonevr::recenter();
@@ -1221,10 +1483,7 @@ impl super::Game<'_> {
             // The turn since the recenter, pulled out of the quaternion the nearest
             // way about: an atan2's cut at reading ±180 is a plain turn, not a spin.
             let turn = f.x.atan2(-f.z).to_degrees();
-            Some((
-                self.yaw + turn,
-                (-f.y).clamp(-1.0, 1.0).asin().to_degrees(),
-            ))
+            Some((self.yaw + turn, (-f.y).clamp(-1.0, 1.0).asin().to_degrees()))
         });
         let Some((yaw, pitch)) = look else {
             return;
@@ -1243,7 +1502,10 @@ impl super::Game<'_> {
         let click = pointer.is_some_and(|(_, held)| held);
         let mut s = shared();
         if let (Some((uv, _)), Some(r)) = (pointer, &self.renderer) {
-            let at = [f64::from(uv[0]) * f64::from(r.config.width), f64::from(uv[1]) * f64::from(r.config.height)];
+            let at = [
+                f64::from(uv[0]) * f64::from(r.config.width),
+                f64::from(uv[1]) * f64::from(r.config.height),
+            ];
             let mut last = AT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if (at[0] - last[0]).abs() + (at[1] - last[1]).abs() > 0.5 {
                 *last = at;
@@ -1253,11 +1515,17 @@ impl super::Game<'_> {
         // The right stick, up or down, turns the wheel where it points: about eight notches
         // a second pushed all the way.
         static WHEEL: Mutex<(f32, Option<std::time::Instant>)> = Mutex::new((0.0, None));
-        let mut wheel = WHEEL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut wheel = WHEEL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = std::time::Instant::now();
-        let dt = wheel.1.map_or(0.0, |t| now.duration_since(t).as_secs_f32().min(0.1));
+        let dt = wheel
+            .1
+            .map_or(0.0, |t| now.duration_since(t).as_secs_f32().min(0.1));
         wheel.1 = Some(now);
-        let stick = horizon_xr::pad().filter(|_| pointer.is_some()).map_or(0.0, |p| p.right[1]);
+        let stick = horizon_xr::pad()
+            .filter(|_| pointer.is_some())
+            .map_or(0.0, |p| p.right[1]);
         if stick.abs() > 0.3 {
             wheel.0 += stick * 8.0 * dt;
         } else {
@@ -1286,12 +1554,11 @@ impl super::Game<'_> {
     /// the player turns to it, picks again, uses, and turns back, so the right hand keeps
     /// aiming and attacking meanwhile. Food at the mouth is eaten wherever the hand points.
     pub(super) fn xr_left_use(&mut self, use_now: impl FnOnce(&mut Self)) {
-        let angles = horizon_xr::hand_angles(true)
-            .filter(|_| {
-                !EATING.load(std::sync::atomic::Ordering::Relaxed)
-                    && !THROWING.load(std::sync::atomic::Ordering::Relaxed)
-                    && !BOW_HELD.load(std::sync::atomic::Ordering::Relaxed)
-            });
+        let angles = horizon_xr::hand_angles(true).filter(|_| {
+            !EATING.load(std::sync::atomic::Ordering::Relaxed)
+                && !THROWING.load(std::sync::atomic::Ordering::Relaxed)
+                && !BOW_HELD.load(std::sync::atomic::Ordering::Relaxed)
+        });
         let Some((yaw, pitch)) = angles else {
             use_now(self);
             return;
@@ -1336,7 +1603,11 @@ impl super::Game<'_> {
             chord = 16;
         }
         let in_menu = self.title.is_none() && self.screen != super::Screen::Playing;
-        let container = in_menu && matches!(self.screen, super::Screen::Inventory | super::Screen::Creative);
+        let container = in_menu
+            && matches!(
+                self.screen,
+                super::Screen::Inventory | super::Screen::Creative
+            );
         CONTAINER_SCREEN.store(container, Ordering::Relaxed);
         let playing = self.title.is_none() && self.screen == super::Screen::Playing;
         // B: the chat, open on the menu's panel in the room (the headset's keyboard comes up
@@ -1344,7 +1615,8 @@ impl super::Game<'_> {
         let chat = self.title.is_none() && self.screen == super::Screen::Chat;
         // It opens as B is let go: the headset's keyboard, coming up with B still held, took
         // its release for its own "back" and went away with the chat.
-        static CHAT_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        static CHAT_ARMED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
         if pressed(32) && playing {
             CHAT_BUTTON.store(true, Ordering::Relaxed);
             CHAT_ARMED.store(true, Ordering::Relaxed);
@@ -1369,9 +1641,14 @@ impl super::Game<'_> {
             if in_menu && self.carried.is_some() {
                 // A click outside the window throws the carried stack: the right button one
                 // item, the left all of it.
-                let back = horizon_xr::pointer().zip(self.renderer.as_ref()).map(|((uv, _), r)| {
-                    [f64::from(uv[0]) * f64::from(r.config.width), f64::from(uv[1]) * f64::from(r.config.height)]
-                });
+                let back = horizon_xr::pointer()
+                    .zip(self.renderer.as_ref())
+                    .map(|((uv, _), r)| {
+                        [
+                            f64::from(uv[0]) * f64::from(r.config.width),
+                            f64::from(uv[1]) * f64::from(r.config.height),
+                        ]
+                    });
                 let mut s = shared();
                 s.mouse.push(MouseInput::Move([1.0, 1.0]));
                 let button = if all { 0 } else { 1 };
@@ -1382,7 +1659,11 @@ impl super::Game<'_> {
                 }
             } else if in_menu || playing {
                 let modifiers = self.modifiers;
-                self.modifiers = if all { ModifiersState::CONTROL } else { ModifiersState::empty() };
+                self.modifiers = if all {
+                    ModifiersState::CONTROL
+                } else {
+                    ModifiersState::empty()
+                };
                 let _ = self.key_pressed(KeyCode::KeyQ, KeyCode::KeyQ);
                 self.modifiers = modifiers;
             }
@@ -1446,7 +1727,9 @@ impl super::Game<'_> {
         use winit::{
             application::ApplicationHandler,
             dpi::PhysicalPosition,
-            event::{DeviceId, ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent},
+            event::{
+                DeviceId, ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
+            },
         };
         let escapes = std::mem::take(&mut shared().escapes);
         for _ in 0..escapes {
@@ -1482,7 +1765,11 @@ impl super::Game<'_> {
                 }
                 MouseInput::Button(i, down) => WindowEvent::MouseInput {
                     device_id,
-                    state: if down { ElementState::Pressed } else { ElementState::Released },
+                    state: if down {
+                        ElementState::Pressed
+                    } else {
+                        ElementState::Released
+                    },
                     button: match i {
                         0 => MouseButton::Left,
                         1 => MouseButton::Right,
@@ -1499,17 +1786,24 @@ impl super::Game<'_> {
             };
             // VR's gestures click for the hands (a swing, a strike, food at the mouth): no
             // mouse took over from the controllers, whose sticks and buttons stay held.
-            let gesture = horizon_xr::active() && !in_menu && matches!(input, MouseInput::Button(..));
+            let gesture =
+                horizon_xr::active() && !in_menu && matches!(input, MouseInput::Button(..));
             let was = self.pad.menu.synthetic;
             self.pad.menu.synthetic = gesture || was;
-            self.handle_window_event(event_loop, window_id, event, super::input_trace::InputOrigin::User);
+            self.handle_window_event(
+                event_loop,
+                window_id,
+                event,
+                super::input_trace::InputOrigin::User,
+            );
             self.pad.menu.synthetic = was;
         }
         if SHIFT_ONCE.swap(false, std::sync::atomic::Ordering::Relaxed) {
             self.modifiers = winit::keyboard::ModifiersState::empty();
         }
         // The pointer is captured for turning the view, and let go in menus.
-        let capture = self.touch.mouse && self.focused && self.player.is_some() && !self.pad_in_menu();
+        let capture =
+            self.touch.mouse && self.focused && self.player.is_some() && !self.pad_in_menu();
         if self.touch.pointer_captured != Some(capture) {
             self.touch.pointer_captured = Some(capture);
             super::android_ime::pointer_capture(capture);

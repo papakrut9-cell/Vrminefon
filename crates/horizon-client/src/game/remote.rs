@@ -10,7 +10,8 @@ use super::remote_chunks::{ChunkDecoder, ChunkFormat, Next};
 /// Until when a break started by a VR blow is kept between blows (`Game::vr_mining_held`).
 /// VR blows not yet dug, each a number of ticks of digging (`Game::remote_vr_blows`).
 pub(super) static VR_BLOWS: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
-pub(super) static VR_MINING_HOLD: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+pub(super) static VR_MINING_HOLD: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
 use super::{Dim, Game, Mining, Screen};
 use horizon_client::actions::Action;
 use horizon_client::first_person::{Hand, SwingAnimation};
@@ -9160,11 +9161,21 @@ impl Game<'_> {
     /// a new block (or plays the hit) and digs its ticks at once, with one swing; between
     /// blows nothing digs, so the crack stays as it is.
     fn remote_vr_blows(&mut self) {
-        let blows = std::mem::take(&mut *VR_BLOWS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        let blows = std::mem::take(
+            &mut *VR_BLOWS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
         for ticks in blows {
-            let running = self.remote.as_ref().and_then(|r| r.is_destroying.then_some(r.destroying).flatten());
+            let running = self
+                .remote
+                .as_ref()
+                .and_then(|r| r.is_destroying.then_some(r.destroying).flatten());
             self.remote_mining(true);
-            let now = self.remote.as_ref().and_then(|r| r.is_destroying.then_some(r.destroying).flatten());
+            let now = self
+                .remote
+                .as_ref()
+                .and_then(|r| r.is_destroying.then_some(r.destroying).flatten());
             if let (Some((before, _, _)), Some((pos, _, _))) = (running, now)
                 && before == pos
                 && let Some(hit) = self.pick()

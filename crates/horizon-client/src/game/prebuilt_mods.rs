@@ -8,6 +8,7 @@
 //! `options.txt`. External storage can't hold running code, so each library
 //! is copied into the app's own storage (`HORIZON_CACHE`'s folder) first.
 use super::Game;
+use horizon_client::graphics::EntityCullingMode;
 use horizon_client::{
     extras::Corner,
     extras_hud::Corners,
@@ -19,7 +20,6 @@ use horizon_native_abi::{
     State,
     host::{Loaded, Outbox},
 };
-use horizon_client::graphics::EntityCullingMode;
 use std::path::{Path, PathBuf};
 
 /// The folder players drop `.hnmod` files into, beside `options.txt`.
@@ -64,8 +64,12 @@ impl ModOptions {
         use horizon_native_abi::options as o;
         match (key, value) {
             (o::ENTITY_CULLING, "off") => self.entity_culling = None,
-            (o::ENTITY_CULLING, "sync") => self.entity_culling = Some(EntityCullingMode::Synchronous),
-            (o::ENTITY_CULLING, "async") => self.entity_culling = Some(EntityCullingMode::Asynchronous),
+            (o::ENTITY_CULLING, "sync") => {
+                self.entity_culling = Some(EntityCullingMode::Synchronous)
+            }
+            (o::ENTITY_CULLING, "async") => {
+                self.entity_culling = Some(EntityCullingMode::Asynchronous)
+            }
             (o::HIDE_OCCLUDED_NAME_TAGS, v) => self.hide_occluded_name_tags = v == "true",
             _ => {}
         }
@@ -176,7 +180,8 @@ pub(super) fn scan(
         let mut r = row(m.id.clone(), title.clone(), None);
         r.native = Some(NativePage::default());
         rows.push(r);
-        let name = horizon_mods::Manifest::of_bundle(&path).map_or_else(|_| m.id.clone(), |c| c.name);
+        let name =
+            horizon_mods::Manifest::of_bundle(&path).map_or_else(|_| m.id.clone(), |c| c.name);
         mods.push(Prebuilt {
             id: m.id.clone(),
             name,
@@ -302,7 +307,11 @@ impl Game<'_> {
     /// The entity culling in effect: the player's own setting, else a mod's.
     pub(super) fn entity_culling_mode(&self) -> EntityCullingMode {
         match self.settings.horizon.entity_culling {
-            EntityCullingMode::Off => self.prebuilt.asked.entity_culling.unwrap_or(EntityCullingMode::Off),
+            EntityCullingMode::Off => self
+                .prebuilt
+                .asked
+                .entity_culling
+                .unwrap_or(EntityCullingMode::Off),
             mode => mode,
         }
     }
@@ -334,7 +343,10 @@ impl Game<'_> {
     /// ray enters it (fluids and air pass), for mods.
     fn prebuilt_far_aim(&self) -> Option<([i32; 3], [f64; 3])> {
         let eye = self.eye_position()?;
-        let (y, p) = (f64::from(self.yaw).to_radians(), f64::from(self.pitch).to_radians());
+        let (y, p) = (
+            f64::from(self.yaw).to_radians(),
+            f64::from(self.pitch).to_radians(),
+        );
         let d = [-y.sin() * p.cos(), -p.sin(), y.cos() * p.cos()];
         let facts = self.res.facts();
         let mut t = 0.5;
@@ -342,7 +354,11 @@ impl Game<'_> {
             let pt = [eye[0] + d[0] * t, eye[1] + d[1] * t, eye[2] + d[2] * t];
             let b = pt.map(|v| v.floor() as i32);
             let name = &*facts.get(self.world.block(b[0], b[1], b[2])).name;
-            let open = matches!(name, "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air") || name.contains("water") || name.contains("lava");
+            let open = matches!(
+                name,
+                "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+            ) || name.contains("water")
+                || name.contains("lava");
             if !open {
                 return Some((b, pt));
             }
@@ -374,7 +390,9 @@ impl Game<'_> {
             .prebuilt
             .options
             .iter()
-            .filter(|(id, _)| !disabled.contains(*id) && mods.iter().any(|m| &m.id == *id && m.loaded.is_some()))
+            .filter(|(id, _)| {
+                !disabled.contains(*id) && mods.iter().any(|m| &m.id == *id && m.loaded.is_some())
+            })
             .fold(ModOptions::default(), |a, (_, o)| a.join(*o));
     }
     pub(super) fn prebuilt_tick(&mut self) {

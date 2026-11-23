@@ -25,7 +25,11 @@ pub fn cache_dir() -> PathBuf {
     // shared storage (/sdcard) refuses symlinks.
     std::env::var_os("HORIZON_CACHE")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join(".horizon-cache"))
+        .unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join(".horizon-cache")
+        })
         .join("resourcepacks")
 }
 pub fn packs_dir() -> PathBuf {
@@ -44,9 +48,9 @@ pub fn open_folder(dir: &Path) {
     }
     #[cfg(not(target_os = "android"))]
     {
-    if let Err(e) = folder::command(dir).and_then(|mut command| command.spawn()) {
-        log::warn!("Horizon: could not open {}: {e}", dir.display());
-    }
+        if let Err(e) = folder::command(dir).and_then(|mut command| command.spawn()) {
+            log::warn!("Horizon: could not open {}: {e}", dir.display());
+        }
     }
 }
 /// `Util.getPlatform().openUri`: the system browser on the link.

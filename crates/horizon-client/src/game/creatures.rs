@@ -393,7 +393,9 @@ impl Game<'_> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .filter(|(at, _)| {
-                (at[0] - p.position.x).abs() < 2.0 && (at[1] - p.position.y).abs() < 2.0 && (at[2] - p.position.z).abs() < 2.0
+                (at[0] - p.position.x).abs() < 2.0
+                    && (at[1] - p.position.y).abs() < 2.0
+                    && (at[2] - p.position.z).abs() < 2.0
             })
             .map_or((self.yaw, self.pitch), |(_, look)| look);
         #[cfg(not(target_os = "android"))]
