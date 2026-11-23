@@ -42,17 +42,22 @@ const FRESH_NS: i64 = 500_000_000;
 /// How long a fused orientation the gyroscope swears is turning may stand still
 /// before it counts as frozen (the MediaTek fusion that stops mid-session).
 const FROZEN_NS: i64 = 750_000_000;
-/// Gyroscope speed, rad/s, above which the head is surely moving.
-const GYRO_MOVING: f32 = 0.15;
-/// How little a fused quaternion may change between readings to still count as
-/// the same one (a cosine; at 100 Hz even a slow head turn shows far more).
+/// How much total gyroscope rotation (radians, accumulated while a fused stack
+/// stands still) convicts it of being frozen: a slow turn that changes nothing in
+/// the fused reading.
+const MOVED_RAD: f32 = 0.1;
+/// How little a fused quaternion may move from its reference to still count as
+/// the same one (a cosine; about eight tenths of a degree of turn).
 const UNCHANGED_DOT: f32 = 0.9999;
+/// How long the rotation vector may report UNRELIABLE (accuracy 0) before the
+/// cascade calls it out.
 /// Gyroscope speed, rad/s, below which the phone is standing still and the
 /// fusion may learn its bias.
 const GYRO_STILL: f32 = 0.02;
 /// How much of the tilt error one accelerometer reading levels away.
 const LEVEL_PER_READING: f32 = 0.02;
 /// Gravity, m/s2, and the band around it a usable accelerometer reading falls in.
+const RELIABLE_NS: i64 = 1_000_000_000;
 const GRAVITY_LOW: f32 = 5.0;
 const GRAVITY_HIGH: f32 = 15.0;
 /// How long a fused pose may be old and still seed the own fusion at handover.
@@ -185,6 +190,14 @@ struct FusedTrack {
     ts: i64,
     /// When its quaternion last actually changed (frozen values do not move it).
     changed_at: i64,
+    /// Its quaternion at `changed_at`, the reference the new readings are
+    /// measured against (a per-reading compare sees nothing in a slow turn).
+    ref_q: Quat,
+    /// Gyroscope rotation, radians, piled up since `changed_at`.
+    moved: f32,
+    /// When it last reported a nonzero accuracy; the game rotation vector has no
+    /// accuracy field, so its readings renew this every time.
+    reliable_at: i64,
 }
 
 /// The crate's own fusion: a complementary filter with the gyroscope driving the
@@ -309,11 +322,41 @@ impl Reader {
             q = -q;
         }
         let index = (kind == SENSOR_ROTATION_VECTOR) as usize;
-        let changed_at = match self.tracks[index] {
-            Some(track) if track.q.dot(q) >= UNCHANGED_DOT => track.changed_at,
-            _ => ts,
+        // Only the plain rotation vector reports an accuracy; the game rotation
+        // vector has none (and nothing reliable after the quaternion).
+        let accuracy = if kind == SENSOR_ROTATION_VECTOR {
+            data[4]
+        } else {
+            1.0
         };
-        self.tracks[index] = Some(FusedTrack { q, ts, changed_at });
+        let (changed_at, ref_q, moved, reliable_at) = match self.tracks[index] {
+            Some(track) => {
+                let (changed_at, ref_q, moved) = if track.ref_q.dot(q) >= UNCHANGED_DOT {
+                    (track.changed_at, track.ref_q, track.moved)
+                } else {
+                    (ts, q, 0.0)
+                };
+                (
+                    changed_at,
+                    ref_q,
+                    moved,
+                    if accuracy > 0.0 {
+                        ts
+                    } else {
+                        track.reliable_at
+                    },
+                )
+            }
+            None => (ts, q, 0.0, ts),
+        };
+        self.tracks[index] = Some(FusedTrack {
+            q,
+            ts,
+            changed_at,
+            ref_q,
+            moved,
+            reliable_at,
+        });
         self.newest = self.newest.max(ts);
         let want = self.pick()?;
         if !matches!(
@@ -324,16 +367,13 @@ impl Reader {
         }
         let switched = self.active != Some(want);
         self.active = Some(want);
-        // Only the plain rotation vector reports an accuracy; the game rotation
-        // vector has none (and nothing reliable after the quaternion).
-        let accuracy = if kind == SENSOR_ROTATION_VECTOR {
-            data[4]
-        } else {
-            0.0
-        };
         Some(Publish {
             rotation: WORLD_TO_VIEW * q,
-            accuracy,
+            accuracy: if kind == SENSOR_ROTATION_VECTOR {
+                data[4]
+            } else {
+                0.0
+            },
             switched,
         })
     }
@@ -344,6 +384,17 @@ impl Reader {
             return None;
         }
         if kind == SENSOR_GYROSCOPE {
+            // Pile the turn onto the fused tracks' motion counters: they convict a
+            // fused stack frozen only when the head really turned under it.
+            if let Some((_, prev)) = self.gyro {
+                let dt = (ts - prev) as f32 * 1e-9;
+                if 0.0 < dt && dt <= 0.2 {
+                    let step = v.length() * dt;
+                    for track in self.tracks.iter_mut().flatten() {
+                        track.moved += step;
+                    }
+                }
+            }
             self.gyro = Some((v, ts));
             self.own.turn(v, ts);
         } else {
@@ -395,8 +446,9 @@ impl Reader {
         None
     }
 
-    /// A fused source is healthy when its readings are fresh -- and, while the
-    /// gyroscope says the head is turning, not visibly frozen on one quaternion.
+    /// A fused source is healthy when its readings are fresh, its accuracy is not
+    /// stuck at UNRELIABLE, and it is not visibly frozen -- standing on one
+    /// quaternion while the gyroscope piled up a real turn under it.
     fn fused_ok(&self, index: usize) -> bool {
         let Some(track) = self.tracks[index] else {
             return false;
@@ -404,14 +456,43 @@ impl Reader {
         if self.newest.saturating_sub(track.ts) > FRESH_NS {
             return false;
         }
-        if let Some((w, wts)) = self.gyro {
-            let moving = w.length() >= GYRO_MOVING;
-            let fresh = self.newest.saturating_sub(wts) <= FRESH_NS;
-            if moving && fresh && self.newest.saturating_sub(track.changed_at) > FROZEN_NS {
-                return false;
-            }
+        if self.newest.saturating_sub(track.reliable_at) > RELIABLE_NS {
+            return false;
         }
-        true
+        let frozen =
+            self.newest.saturating_sub(track.changed_at) > FROZEN_NS && track.moved >= MOVED_RAD;
+        !frozen
+    }
+
+    /// The book, for the once-a-second log: how stale every source is and what
+    /// the gyroscope has piled up under the fused stacks.
+    fn report(&self) -> String {
+        let age = |ts: i64| self.newest.saturating_sub(ts) as f32 / 1e9;
+        let mut parts = Vec::new();
+        for (name, track) in [("game", self.tracks[0]), ("rot", self.tracks[1])] {
+            parts.push(match track {
+                Some(t) => format!(
+                    "{} age {:.1}s frozen {:.1}s turn {:.2}rad unreliable {:.1}s",
+                    name,
+                    age(t.ts),
+                    age(t.changed_at),
+                    t.moved,
+                    age(t.reliable_at),
+                ),
+                None => format!("{name} none"),
+            });
+        }
+        if let Some((w, wts)) = self.gyro {
+            parts.push(format!("gyro age {:.1}s |w| {:.3}", age(wts), w.length()));
+        } else {
+            parts.push("gyro none".to_string());
+        }
+        if let Some((a, ats)) = self.accel {
+            parts.push(format!("accel age {:.1}s |a| {:.1}", age(ats), a.length()));
+        } else {
+            parts.push("accel none".to_string());
+        }
+        parts.join(" | ")
     }
 
     fn own_ok(&self) -> bool {
@@ -564,31 +645,36 @@ fn sensor_loop() {
                     });
                 }
             }
-            log_pose(&mut last_log, source);
+            log_pose(&mut last_log, source, &reader);
         }
         RUNNING.store(false, Ordering::Relaxed);
     }
 }
 
 /// Once a second, put where the game sees the head in the log, with the source
-/// that is driving it, so hardware can be checked with plain `adb logcat`.
+/// that is driving it and the state of every subscribed sensor, so hardware can
+/// be checked with plain `adb logcat`.
 #[cfg(target_os = "android")]
-fn log_pose(last_log: &mut Option<Instant>, source: Option<&str>) {
+fn log_pose(last_log: &mut Option<Instant>, source: Option<&str>, reader: &Reader) {
     let log_it = last_log.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(1));
     if !log_it {
         return;
     }
     *last_log = Some(Instant::now());
+    let report = reader.report();
     if let Some(pose) = head() {
         let (yaw, pitch, roll) = pose.rotation.to_euler(glam::EulerRot::YXZ);
         log::info!(
-            "Phone VR: head yaw {:.1} pitch {:.1} roll {:.1} accuracy {:.2} source {}",
+            "Phone VR: head yaw {:.1} pitch {:.1} roll {:.1} accuracy {:.2} source {} | {}",
             yaw.to_degrees(),
             pitch.to_degrees(),
             roll.to_degrees(),
             pose.accuracy,
             source.unwrap_or("none"),
+            report,
         );
+    } else {
+        log::info!("Phone VR: no pose | {report}");
     }
 }
 
@@ -981,6 +1067,77 @@ mod tests {
         // now moves with the raw gyroscope.
         let f = head().unwrap().rotation * Vec3::NEG_Z;
         assert!(f.x > 0.1, "forward {f:?} did not follow the turn");
+    }
+
+    #[test]
+    fn a_slow_turn_under_a_frozen_stack_still_hands_over() {
+        let _test = begin();
+        let mut reader = Reader::default();
+        step_game(
+            &mut reader,
+            SENSOR_GAME_ROTATION_VECTOR,
+            NS,
+            &fused_data(recentered()),
+        );
+        // The phone case that started it: a slow head turn (six degrees a second,
+        // far below any single-gyroscope-reading threshold) under a fused stack
+        // frozen on one quaternion. The turn piles up in the motion counters, and
+        // the stack is benched all the same.
+        let mut handover = false;
+        for step in 12..26 {
+            let ts = step * NS / 10;
+            step_game(
+                &mut reader,
+                SENSOR_GAME_ROTATION_VECTOR,
+                ts,
+                &fused_data(recentered()),
+            );
+            if step_game(
+                &mut reader,
+                SENSOR_GYROSCOPE,
+                ts,
+                &vec16(Vec3::new(-0.1, 0.0, 0.0)),
+            )
+            .is_some()
+            {
+                handover = true;
+            }
+            step_game(&mut reader, SENSOR_ACCELEROMETER, ts, &glasses_flat());
+        }
+        assert!(
+            handover,
+            "the frozen stack kept the head even for a slow turn"
+        );
+    }
+
+    #[test]
+    fn an_unreliable_rotation_vector_is_benched() {
+        let _test = begin();
+        let mut reader = Reader::default();
+        // The rotation vector (reads go through it because the game one is
+        // absent) reports UNRELIABLE (accuracy 0) and never recovers: after a
+        // second of that it is benched too, and the own fusion drives. The seed
+        // comes from its last reading, so the head does not jump.
+        step_game(
+            &mut reader,
+            SENSOR_ROTATION_VECTOR,
+            NS,
+            &fused_data(recentered()),
+        );
+        assert!(matches!(reader.active, Some(Source::Rot)));
+        for step in 12..24 {
+            let ts = step * NS / 10;
+            step_game(
+                &mut reader,
+                SENSOR_ROTATION_VECTOR,
+                ts,
+                &fused_data(recentered()),
+            );
+            step_game(&mut reader, SENSOR_GYROSCOPE, ts, &vec16(Vec3::ZERO));
+            step_game(&mut reader, SENSOR_ACCELEROMETER, ts, &glasses_flat());
+        }
+        assert!(matches!(reader.active, Some(Source::Own)));
+        is_close(head().unwrap().rotation, Quat::IDENTITY);
     }
 
     #[test]
