@@ -506,16 +506,23 @@ impl Reader {
     }
 }
 
-/// Start the sensor thread. Only once; the game calls it when
-/// `HORIZON_PHONEVR=1` chooses the phone-VR picture over the flat one.
+/// Start the sensors. Only once; the game calls it when `HORIZON_PHONEVR=1`
+/// chooses the phone-VR picture over the flat one, with the VM and activity
+/// pointers android-activity hands out (they live as long as the app). The
+/// readings arrive as JNI callbacks from the framework's SensorManager -- the
+/// path Cardboard, PhoneVR and RiftCat all register on, because the sensor HAL
+/// has to honor it (the raw NDK event queue of the first try silently stopped
+/// delivering on some firmware).
 #[cfg(target_os = "android")]
-pub fn start() {
+pub fn start(vm_ptr: *mut std::ffi::c_void, activity_ptr: *mut std::ffi::c_void) {
     if RUNNING.swap(true, Ordering::Relaxed) {
         return;
     }
+    let vm = AppPtr(vm_ptr);
+    let activity = AppPtr(activity_ptr);
     if let Err(error) = std::thread::Builder::new()
         .name("Phone VR".into())
-        .spawn(sensor_loop)
+        .spawn(move || unsafe { sensor_setup(vm, activity) })
     {
         log::error!("Phone VR: the sensor thread did not start ({error})");
         RUNNING.store(false, Ordering::Relaxed);
@@ -530,123 +537,117 @@ pub fn start() {}
 /// display.
 #[cfg(target_os = "android")]
 const RATE_US: i32 = 10_000;
-/// The identity the event queue is created under, so [`ALooper_pollAll`] hands its
-/// events back without any callbacks.
+
+/// The reader the JNI callbacks book into, one per process.
 #[cfg(target_os = "android")]
-const QUEUE_IDENT: i32 = 3;
-/// The sensor loop quits after this many queue errors in a row: losing the sensor
-/// service is the only way to fail like this, and spinning on it burns the battery.
+fn reader() -> MutexGuard<'static, Reader> {
+    static READER: OnceLock<Mutex<Reader>> = OnceLock::new();
+    READER
+        .get_or_init(|| Mutex::new(Reader::default()))
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The source of the last accepted reading, for the log (0 none, 1 game,
+/// 2 rotation vector, 3 the own fusion).
 #[cfg(target_os = "android")]
-const MAX_ERRORS: u32 = 5;
+static LAST_SOURCE: AtomicU8 = AtomicU8::new(0);
+
+/// A raw pointer android-activity hands out, valid for the whole process; this
+/// lets the sensor thread carry it.
+#[cfg(target_os = "android")]
+struct AppPtr(*mut std::ffi::c_void);
+#[cfg(target_os = "android")]
+unsafe impl Send for AppPtr {}
 
 #[cfg(target_os = "android")]
-fn sensor_loop() {
-    unsafe {
-        let manager = ASensorManager_getInstanceForPackage(
-            b"dev.horizonlab.horizon\0"
-                .as_ptr()
-                .cast::<std::ffi::c_char>(),
-        );
-        if manager.is_null() {
-            log::warn!("Phone VR: the sensor manager did not start; running flat");
-            RUNNING.store(false, Ordering::Relaxed);
-            return;
-        }
-        let kinds = [
-            SENSOR_GAME_ROTATION_VECTOR,
-            SENSOR_ROTATION_VECTOR,
-            SENSOR_ACCELEROMETER,
-            SENSOR_GYROSCOPE,
-        ];
-        let mut sensors: [*const ASensor; 4] = [std::ptr::null(); 4];
-        for (index, kind) in kinds.into_iter().enumerate() {
-            sensors[index] = ASensorManager_getDefaultSensor(manager, kind);
-        }
-        if sensors[0].is_null()
-            && sensors[1].is_null()
-            && (sensors[2].is_null() || sensors[3].is_null())
-        {
-            log::warn!(
-                "Phone VR: no rotation vector and no working accelerometer plus \
-                 gyroscope; running flat"
-            );
-            RUNNING.store(false, Ordering::Relaxed);
-            return;
-        }
-        let looper = ALooper_prepare(ALOOPER_PREPARE_ALLOW_NON_CALLBACKS);
-        let queue = ASensorManager_createEventQueue(
-            manager,
-            looper,
-            QUEUE_IDENT,
-            None,
-            std::ptr::null_mut(),
-        );
-        if queue.is_null() {
-            log::warn!("Phone VR: the sensor event queue did not open; running flat");
-            RUNNING.store(false, Ordering::Relaxed);
-            return;
-        }
-        let mut enabled = 0;
-        for sensor in sensors.into_iter().filter(|sensor| !sensor.is_null()) {
-            if ASensorEventQueue_enableSensor(queue, sensor) >= 0
-                && ASensorEventQueue_setEventRate(queue, sensor, RATE_US) >= 0
-            {
-                enabled += 1;
-            } else {
-                log::warn!(
-                    "Phone VR: one of the head sensors would not start; the others carry on"
-                );
+unsafe fn sensor_setup(vm: AppPtr, activity: AppPtr) {
+    // SAFETY: the VM and activity pointers android-activity hands out live as
+    // long as the app, and this thread only ever sets the listener up and then
+    // sleeps; its work is the once-a-second log.
+    // SAFETY: the VM and activity pointers android-activity hands out live as long as the app.
+    let run = (|| -> jni::errors::Result<()> {
+        unsafe {
+            let vm = jni::JavaVM::from_raw(vm.0.cast())?;
+            let mut env = vm.attach_current_thread_permanently()?;
+            let activity = jni::objects::JObject::from_raw(activity.0.cast());
+            // FindClass on an attached thread looks in the system loader and misses
+            // app classes: reach the listener through the activity's own loader.
+            let class = env.get_object_class(&activity)?;
+            let loader = env
+                .call_method(&class, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])?
+                .l()?;
+            let name = env.new_string("dev.horizonlab.horizon.PhoneVrSensors")?;
+            let class = env
+                .call_method(
+                    &loader,
+                    "loadClass",
+                    "(Ljava/lang/String;)Ljava/lang/Class;",
+                    &[jni::objects::JValue::Object(&name)],
+                )?
+                .l()?;
+            let class = jni::objects::JClass::from(class);
+            let service = env
+                .get_static_field(
+                    "android/content/Context",
+                    "SENSOR_SERVICE",
+                    "Ljava/lang/String;",
+                )?
+                .l()?;
+            let manager = env
+                .call_method(
+                    &activity,
+                    "getSystemService",
+                    "(Ljava/lang/String;)Ljava/lang/Object;",
+                    &[jni::objects::JValue::Object(&service)],
+                )?
+                .l()?;
+            let types = env.new_int_array(4)?;
+            env.set_int_array_region(
+                &types,
+                0,
+                &[
+                    SENSOR_GAME_ROTATION_VECTOR,
+                    SENSOR_ROTATION_VECTOR,
+                    SENSOR_ACCELEROMETER,
+                    SENSOR_GYROSCOPE,
+                ],
+            )?;
+            let listener = env.new_object(
+                &class,
+                "(Landroid/hardware/SensorManager;[I)V",
+                &[
+                    jni::objects::JValue::Object(&manager),
+                    jni::objects::JValue::Object(&types),
+                ],
+            )?;
+            // The global ref keeps the listener (and its registration) alive for the
+            // whole run; a collected listener is a silent one.
+            let listener = env.new_global_ref(&listener)?;
+            let on = env
+                .call_method(
+                    listener.as_obj(),
+                    "start",
+                    "(I)Z",
+                    &[jni::objects::JValue::Int(RATE_US)],
+                )?
+                .z()?;
+            if !on {
+                log::warn!("Phone VR: this phone has none of the head sensors; running flat");
+                RUNNING.store(false, Ordering::Relaxed);
+                return Ok(());
+            }
+            log::info!("Phone VR: the head sensors are on (SensorManager)");
+            loop {
+                // The monitor thread just logs; the readings arrive on the main
+                // thread in [`Java_dev_horizonlab_horizon_PhoneVrSensors_phoneVrSensor`].
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                log_pose();
             }
         }
-        if enabled == 0 {
-            log::warn!("Phone VR: the head sensors would not start; running flat");
-            RUNNING.store(false, Ordering::Relaxed);
-            return;
-        }
-        log::info!("Phone VR: the head sensors are on");
-        // Since the raw sensors are subscribed too, events keep arriving even when
-        // a fused stack stops mid-session -- which is what lets the reader notice
-        // the freeze and hand over.
-        let mut reader = Reader::default();
-        let mut events = [ASensorEvent::ZERO; 8];
-        let mut errors = 0;
-        let mut source: Option<&'static str> = None;
-        let mut last_log: Option<Instant> = None;
-        loop {
-            let ident = ALooper_pollAll(
-                -1,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            );
-            if ident != QUEUE_IDENT {
-                // ALOOPER_POLL_ERROR, or a timeout that never comes with a -1 timeout.
-                errors += 1;
-                if errors >= MAX_ERRORS {
-                    log::warn!(
-                        "Phone VR: the head sensors stopped answering; head tracking is off"
-                    );
-                    break;
-                }
-                continue;
-            }
-            errors = 0;
-            let count = ASensorEventQueue_getEvents(queue, events.as_mut_ptr(), events.len());
-            if count <= 0 {
-                continue;
-            }
-            for event in &events[..count as usize] {
-                if let Some(published) = reader.ingest(event.kind, event.timestamp, event.data) {
-                    publish(published);
-                    source = Some(match reader.active {
-                        Some(Source::Game) => "game_rotvec",
-                        Some(Source::Rot) => "rotvec",
-                        _ => "own gyro+accel",
-                    });
-                }
-            }
-            log_pose(&mut last_log, source, &reader);
-        }
+    })();
+    if let Err(error) = run {
+        log::warn!("Phone VR: the SensorManager did not open ({error}); running flat");
         RUNNING.store(false, Ordering::Relaxed);
     }
 }
@@ -655,13 +656,14 @@ fn sensor_loop() {
 /// that is driving it and the state of every subscribed sensor, so hardware can
 /// be checked with plain `adb logcat`.
 #[cfg(target_os = "android")]
-fn log_pose(last_log: &mut Option<Instant>, source: Option<&str>, reader: &Reader) {
-    let log_it = last_log.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(1));
-    if !log_it {
-        return;
-    }
-    *last_log = Some(Instant::now());
-    let report = reader.report();
+fn log_pose() {
+    let report = reader().report();
+    let source = match LAST_SOURCE.load(Ordering::Relaxed) {
+        1 => "game_rotvec",
+        2 => "rotvec",
+        3 => "own gyro+accel",
+        _ => "none",
+    };
     if let Some(pose) = head() {
         let (yaw, pitch, roll) = pose.rotation.to_euler(glam::EulerRot::YXZ);
         log::info!(
@@ -670,7 +672,7 @@ fn log_pose(last_log: &mut Option<Instant>, source: Option<&str>, reader: &Reade
             pitch.to_degrees(),
             roll.to_degrees(),
             pose.accuracy,
-            source.unwrap_or("none"),
+            source,
             report,
         );
     } else {
@@ -678,104 +680,44 @@ fn log_pose(last_log: &mut Option<Instant>, source: Option<&str>, reader: &Reade
     }
 }
 
+/// A sensor reading, posted by `PhoneVrSensors`. The framework's callback lands
+/// on the main thread; it only books the reading -- the cascade decides whether
+/// it becomes the head.
 #[cfg(target_os = "android")]
-use std::time::Instant;
-
-/// A `libandroid.so` handle; its guts are private to the platform.
-#[cfg(target_os = "android")]
-#[repr(C)]
-struct ASensorManager {
-    _opaque: [u8; 0],
-}
-/// A `libandroid.so` handle; its guts are private to the platform.
-#[cfg(target_os = "android")]
-#[repr(C)]
-struct ASensorEventQueue {
-    _opaque: [u8; 0],
-}
-/// A `libandroid.so` handle; its guts are private to the platform.
-#[cfg(target_os = "android")]
-#[repr(C)]
-struct ASensor {
-    _opaque: [u8; 0],
-}
-/// A `libandroid.so` handle; its guts are private to the platform.
-#[cfg(target_os = "android")]
-#[repr(C)]
-struct ALooper {
-    _opaque: [u8; 0],
-}
-
-/// The sensor reading, the NDK's `ASensorEvent` (sensor.h), laid out one to one;
-/// the size check below keeps any platform that grows it from corrupting memory.
-#[cfg(target_os = "android")]
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct ASensorEvent {
-    version: i32,
-    sensor: i32,
-    kind: i32,
-    reserved0: i32,
-    timestamp: i64,
-    data: [f32; 16],
-    reserved1: [u32; 16],
-}
-
-#[cfg(target_os = "android")]
-impl ASensorEvent {
-    const ZERO: Self = Self {
-        version: 0,
-        sensor: 0,
-        kind: 0,
-        reserved0: 0,
-        timestamp: 0,
-        data: [0.0; 16],
-        reserved1: [0; 16],
+#[unsafe(no_mangle)]
+extern "system" fn Java_dev_horizonlab_horizon_PhoneVrSensors_phoneVrSensor(
+    env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    kind: jni::sys::jint,
+    ts: jni::sys::jlong,
+    values: jni::sys::jfloatArray,
+) {
+    let values = unsafe { jni::objects::JPrimitiveArray::<jni::sys::jfloat>::from_raw(values) };
+    let mut data = [0.0f32; 16];
+    let Ok(len) = env.get_array_length(&values) else {
+        return;
     };
+    if env
+        .get_float_array_region(&values, 0, &mut data[..(len as usize).min(16)])
+        .is_err()
+    {
+        return;
+    }
+    if let Some(published) = reader().ingest(kind, ts, data) {
+        publish(published);
+        LAST_SOURCE.store(
+            match kind {
+                SENSOR_GAME_ROTATION_VECTOR => 1,
+                SENSOR_ROTATION_VECTOR => 2,
+                _ => 3,
+            },
+            Ordering::Relaxed,
+        );
+    }
 }
-#[cfg(target_os = "android")]
-const _: () = assert!(std::mem::size_of::<ASensorEvent>() == 152);
 
 #[cfg(target_os = "android")]
-const ALOOPER_PREPARE_ALLOW_NON_CALLBACKS: i32 = 1 << 0;
-
-#[cfg(target_os = "android")]
-#[link(name = "android")]
-unsafe extern "C" {
-    fn ALooper_prepare(options: i32) -> *mut ALooper;
-    fn ALooper_pollAll(
-        timeout_ms: i32,
-        out_fd: *mut i32,
-        out_events: *mut i32,
-        out_data: *mut *mut std::ffi::c_void,
-    ) -> i32;
-    fn ASensorManager_getInstanceForPackage(
-        package_name: *const std::ffi::c_char,
-    ) -> *mut ASensorManager;
-    fn ASensorManager_getDefaultSensor(
-        manager: *mut ASensorManager,
-        sensor_type: i32,
-    ) -> *const ASensor;
-    fn ASensorManager_createEventQueue(
-        manager: *mut ASensorManager,
-        looper: *mut ALooper,
-        ident: i32,
-        callback: Option<unsafe extern "C" fn(i32, i32, *mut std::ffi::c_void) -> i32>,
-        data: *mut std::ffi::c_void,
-    ) -> *mut ASensorEventQueue;
-    fn ASensorEventQueue_enableSensor(queue: *mut ASensorEventQueue, sensor: *const ASensor)
-    -> i32;
-    fn ASensorEventQueue_setEventRate(
-        queue: *mut ASensorEventQueue,
-        sensor: *const ASensor,
-        rate: i32,
-    ) -> i32;
-    fn ASensorEventQueue_getEvents(
-        queue: *mut ASensorEventQueue,
-        events: *mut ASensorEvent,
-        count: usize,
-    ) -> isize;
-}
+use std::sync::atomic::AtomicU8;
 
 #[cfg(test)]
 mod tests {

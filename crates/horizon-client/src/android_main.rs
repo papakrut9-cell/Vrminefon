@@ -115,7 +115,8 @@ fn android_main(app: AndroidApp) {
     // Phone VR: the phone's own sensors drive the head, SBS on the screen
     // (docs/phonevr/PLAN.md); without the flag the game stays flat.
     if std::env::var("HORIZON_PHONEVR").as_deref() == Ok("1") {
-        horizon_phonevr::start();
+        // SAFETY: the VM and activity pointers android-activity hands out live as long as the app.
+        horizon_phonevr::start(app.vm_as_ptr(), app.activity_as_ptr());
     }
     // Development: the derived pack made on the device beside the installed one (vr-env.txt).
     if std::env::var("HORIZON_DERIVE_TEST").as_deref() == Ok("1") {

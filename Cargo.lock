@@ -1897,6 +1897,7 @@ name = "horizon-phonevr"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "jni 0.21.1",
  "log",
 ]
 
