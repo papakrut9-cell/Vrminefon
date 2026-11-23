@@ -3,19 +3,22 @@
 //! so Cardboard-style glasses show it in 3D. Where the sensor crate for standalone
 //! headsets goes through OpenXR, here the head comes straight from the sensor HAL.
 //!
-//! The sensor thread subscribes to every orientation source the phone has -- the
-//! fused rotation vectors, and behind them the raw accelerometer and gyroscope --
-//! and picks the freshest working one, in a cascade: the game rotation vector,
-//! then the rotation vector, then the crate's own fusion of the raw pair. Firmware
-//! fusion stacks have been seen to die silently mid-session (a MediaTek game
-//! rotation vector that keeps its subscription but stops delivering), so every
-//! fused reading carries a health check and the cascade hands over without moving
-//! the in-game head. The last source is a complementary filter of our own: the
-//! gyroscope drives the turn and the accelerometer lays the horizon level.
+//! The head's first source is the crate's own fusion of the raw pair -- the
+//! gyroscope driving the turn, the accelerometer laying the horizon level -- and
+//! the phone's fused rotation vectors stand behind it as fallbacks: the game
+//! rotation vector, then the rotation vector. That is the order the proven
+//! phone-headset stacks run on (the open Cardboard SDK's head tracker reads the
+//! raw pair alone), because firmware fusion stacks fail in the field: they die
+//! silently mid-session or freeze on one quaternion (an Infinix/MediaTek game
+//! rotation vector has done both), while the raw ones keep delivering. Fusion
+//! stacks that run still carry a health check, and a source switch rebases the
+//! origin, so the in-game head never jumps.
 //!
-//! The sensor thread reads through the NDK's `ASensor*` calls -- no JNI, no Java --
-//! and hands out the latest pose to [`head`] as the turn since the last
-//! [`recenter`]: both the reading and the recenter go through the same base turn
+//! The sensor thread subscribes through the framework's SensorManager, by way of
+//! a small Java listener (packaging/android/java/dev/horizonlab/horizon/) -- the
+//! registration path every proven phone-headset app uses, and the one the vendor
+//! HAL has to honor -- and hands out the latest pose to [`head`] as the turn
+//! since the last [`recenter`]: both the reading and the recenter go through the same base turn
 //! from the sensor's east-north-up frame into the view's, so the phone's
 //! orientation in the glasses (the landscape quarter turn included) cancels
 //! out and what is left is where the head moved.
@@ -169,16 +172,17 @@ fn publish(p: Publish) {
     state.latest = Some((p.rotation, p.accuracy));
 }
 
-/// One rung of the cascade.
+/// A rung the head can run on.
 #[derive(Clone, Copy, PartialEq)]
 enum Source {
-    /// The game rotation vector: heading relative to its own start (no compass
-    /// to confuse), and the rung the recenter makes redundant everywhere else.
+    /// The crate's own gyro-plus-accelerometer fusion: the first rung, the way
+    /// Cardboard runs, because the raw pair cannot break. The gyroscope's own
+    /// drift is the price -- the recenter takes it back out whenever it shows.
+    Own,
+    /// The game rotation vector, when the raw pair goes stale.
     Game,
     /// The plain rotation vector, when the phone's game one is broken.
     Rot,
-    /// The crate's own gyro-plus-accelerometer fusion, behind the firmware's.
-    Own,
 }
 
 /// The last pose from one fused sensor, with the timestamps it needs to be judged.
@@ -280,7 +284,7 @@ impl OwnFusion {
 /// The book a sensor reading lands in, and the cascade on top of it.
 #[derive(Default)]
 struct Reader {
-    /// Tracks for the game rotation vector and the rotation vector, in cascade
+    /// Tracks for the game rotation vector and the rotation vector, fallback
     /// order.
     tracks: [Option<FusedTrack>; 2],
     /// The last gyroscope reading (rad/s) and its sensor time.
@@ -296,8 +300,8 @@ struct Reader {
 
 impl Reader {
     /// Take one sensor event. Returns the reading when its source is the one now
-    /// running the head -- a rung's own events are still booked while a lower rung
-    /// drives, they just do not turn the camera.
+    /// running the head -- a rung's own events are still booked while another
+    /// rung drives, they just do not turn the camera.
     fn ingest(&mut self, kind: i32, ts: i64, data: [f32; 16]) -> Option<Publish> {
         match kind {
             SENSOR_GAME_ROTATION_VECTOR | SENSOR_ROTATION_VECTOR => {
@@ -359,10 +363,10 @@ impl Reader {
         });
         self.newest = self.newest.max(ts);
         let want = self.pick()?;
-        if !matches!(
-            (want, index),
-            (Source::Game, 0) | (Source::Rot, 1) | (Source::Own, _)
-        ) {
+        // A fused event drives the head only when its own rung is the one
+        // running: an earlier bug let a frozen-but-fresh rotation vector steer
+        // (and stick) the head even while the own fusion was picked.
+        if !matches!((want, index), (Source::Game, 0) | (Source::Rot, 1)) {
             return None;
         }
         let switched = self.active != Some(want);
@@ -430,18 +434,19 @@ impl Reader {
         self.own.seed(from_fused, up_dev);
     }
 
-    /// The best source right now: the highest cascade rung that has a healthy
-    /// reading. The own fusion, unlike the fused sensors, cannot freeze -- its
-    /// parts are the raw ones the phone's firmware cannot break.
+    /// The best source right now: the own fusion first -- the raw pair the
+    /// firmware cannot break, the only rung Cardboard's tracker has ever needed
+    /// -- then the fused rotation vectors, which on the healthy phones steer
+    /// with no drift.
     fn pick(&self) -> Option<Source> {
+        if self.own_ok() {
+            return Some(Source::Own);
+        }
         if self.fused_ok(0) {
             return Some(Source::Game);
         }
         if self.fused_ok(1) {
             return Some(Source::Rot);
-        }
-        if self.own_ok() {
-            return Some(Source::Own);
         }
         None
     }
@@ -638,6 +643,14 @@ unsafe fn sensor_setup(vm: AppPtr, activity: AppPtr) {
                 return Ok(());
             }
             log::info!("Phone VR: the head sensors are on (SensorManager)");
+            // The one-a-second book also lands in the game's folder (the process
+            // directory), where the ordinary file manager sees it: adb privileges
+            // are not a given on the player's phone.
+            std::fs::write(
+                "phonevr.log",
+                "Phone VR: the head sensors are on (SensorManager)\n",
+            )
+            .ok();
             loop {
                 // The monitor thread just logs; the readings arrive on the main
                 // thread in [`Java_dev_horizonlab_horizon_PhoneVrSensors_phoneVrSensor`].
@@ -652,9 +665,10 @@ unsafe fn sensor_setup(vm: AppPtr, activity: AppPtr) {
     }
 }
 
-/// Once a second, put where the game sees the head in the log, with the source
-/// that is driving it and the state of every subscribed sensor, so hardware can
-/// be checked with plain `adb logcat`.
+/// Once a second, put where the game sees the head into the log, with the source
+/// that is driving it and the state of every subscribed sensor -- and append the
+/// same line to `phonevr.log` in the game's folder, so the hardware can be
+/// checked from the phone itself, with no adb around.
 #[cfg(target_os = "android")]
 fn log_pose() {
     let report = reader().report();
@@ -664,20 +678,28 @@ fn log_pose() {
         3 => "own gyro+accel",
         _ => "none",
     };
-    if let Some(pose) = head() {
-        let (yaw, pitch, roll) = pose.rotation.to_euler(glam::EulerRot::YXZ);
-        log::info!(
-            "Phone VR: head yaw {:.1} pitch {:.1} roll {:.1} accuracy {:.2} source {} | {}",
-            yaw.to_degrees(),
-            pitch.to_degrees(),
-            roll.to_degrees(),
-            pose.accuracy,
-            source,
-            report,
-        );
-    } else {
-        log::info!("Phone VR: no pose | {report}");
-    }
+    let message = match head() {
+        Some(pose) => {
+            let (yaw, pitch, roll) = pose.rotation.to_euler(glam::EulerRot::YXZ);
+            format!(
+                "head yaw {:.1} pitch {:.1} roll {:.1} accuracy {:.2} source {} | {}",
+                yaw.to_degrees(),
+                pitch.to_degrees(),
+                roll.to_degrees(),
+                pose.accuracy,
+                source,
+                report,
+            )
+        }
+        None => format!("no pose | {report}"),
+    };
+    log::info!("Phone VR: {message}");
+    use std::io::Write as _;
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("phonevr.log")
+        .and_then(|mut file| writeln!(file, "{message}"));
 }
 
 /// A sensor reading, posted by `PhoneVrSensors`. The framework's callback lands
@@ -977,8 +999,8 @@ mod tests {
         );
         // The MediaTek bug, a small stage of it: the fused stack keeps delivering
         // the same quaternion (fresh, but visibly frozen to the gyroscope's eye)
-        // while the head is turning. It is benched, and the own fusion takes over
-        // from its last real pose.
+        // while the head is turning. The raw pair outranks it the moment both
+        // parts are fresh, and the own fusion takes over from its last real pose.
         let mut handover = None;
         for step in 12..28 {
             let ts = step * NS / 10;
@@ -1012,6 +1034,43 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_but_frozen_rotation_vector_cannot_steal_the_head() {
+        let _test = begin();
+        let mut reader = Reader::default();
+        step_game(&mut reader, SENSOR_GYROSCOPE, NS, &vec16(Vec3::ZERO));
+        step_game(&mut reader, SENSOR_ACCELEROMETER, NS, &glasses_flat());
+        assert!(matches!(reader.active, Some(Source::Own)));
+        // The rung below holds no working fused pose at all, and the phone
+        // delivers a game rotation vector frozen on one quaternion all the same
+        // (the MediaTek firmware kept the subscription while the values stopped).
+        // Its events stay booked, never drive: the own fusion turns the head, the
+        // frozen vector keeps telling the old straight ahead.
+        for step in 1..131 {
+            let ts = NS + step * NS / 100;
+            step_game(
+                &mut reader,
+                SENSOR_GYROSCOPE,
+                ts,
+                &vec16(Vec3::new(-0.9, 0.0, 0.0)),
+            );
+            step_game(&mut reader, SENSOR_ACCELEROMETER, ts, &glasses_flat());
+            step_game(
+                &mut reader,
+                SENSOR_GAME_ROTATION_VECTOR,
+                ts,
+                &fused_data(recentered()),
+            );
+        }
+        assert!(matches!(reader.active, Some(Source::Own)));
+        let f = head().unwrap().rotation * Vec3::NEG_Z;
+        assert!(
+            f.x > 0.8,
+            "forward {f:?} was dragged back to the frozen vector"
+        );
+        assert!(f.y.abs() < 0.2, "forward {f:?} left the horizon");
+    }
+
+    #[test]
     fn a_slow_turn_under_a_frozen_stack_still_hands_over() {
         let _test = begin();
         let mut reader = Reader::default();
@@ -1023,8 +1082,8 @@ mod tests {
         );
         // The phone case that started it: a slow head turn (six degrees a second,
         // far below any single-gyroscope-reading threshold) under a fused stack
-        // frozen on one quaternion. The turn piles up in the motion counters, and
-        // the stack is benched all the same.
+        // frozen on one quaternion. The raw pair outranks the stack at once, so
+        // the head follows even the slow turn.
         let mut handover = false;
         for step in 12..26 {
             let ts = step * NS / 10;
@@ -1053,13 +1112,14 @@ mod tests {
     }
 
     #[test]
-    fn an_unreliable_rotation_vector_is_benched() {
+    fn an_unreliable_rotation_vector_cannot_outrank_the_raw_pair() {
         let _test = begin();
         let mut reader = Reader::default();
         // The rotation vector (reads go through it because the game one is
-        // absent) reports UNRELIABLE (accuracy 0) and never recovers: after a
-        // second of that it is benched too, and the own fusion drives. The seed
-        // comes from its last reading, so the head does not jump.
+        // absent) reports UNRELIABLE (accuracy 0) and never recovers. Alone it
+        // still opens the head -- but the raw pair outranks it the moment both
+        // parts are fresh, and the seed comes from the vector's last reading, so
+        // the head does not jump across the handover.
         step_game(
             &mut reader,
             SENSOR_ROTATION_VECTOR,
@@ -1067,23 +1127,16 @@ mod tests {
             &fused_data(recentered()),
         );
         assert!(matches!(reader.active, Some(Source::Rot)));
-        for step in 12..24 {
-            let ts = step * NS / 10;
-            step_game(
-                &mut reader,
-                SENSOR_ROTATION_VECTOR,
-                ts,
-                &fused_data(recentered()),
-            );
-            step_game(&mut reader, SENSOR_GYROSCOPE, ts, &vec16(Vec3::ZERO));
-            step_game(&mut reader, SENSOR_ACCELEROMETER, ts, &glasses_flat());
-        }
+        let first = step_game(&mut reader, SENSOR_GYROSCOPE, 2 * NS, &vec16(Vec3::ZERO));
+        assert!(first.is_none(), "the own fusion drove off the gyro alone");
+        let first = step_game(&mut reader, SENSOR_ACCELEROMETER, 2 * NS, &glasses_flat()).unwrap();
         assert!(matches!(reader.active, Some(Source::Own)));
+        is_close(first, WORLD_TO_VIEW * Quat::from_mat3(&recentered()));
         is_close(head().unwrap().rotation, Quat::IDENTITY);
     }
 
     #[test]
-    fn a_silent_fused_stack_hands_over_to_the_raw_imu() {
+    fn a_silent_fused_stack_hands_over_at_the_raw_pair_first_beat() {
         let _test = begin();
         let mut reader = Reader::default();
         step_game(
@@ -1092,22 +1145,21 @@ mod tests {
             NS,
             &fused_data(recentered()),
         );
-        // The other stage: the fused events simply stop. The cascade waits out the
-        // half-second belief the last reading earned, then hands over -- seeded
-        // from that reading, so the head does not jump.
+        // The other stage: the fused events simply stop. The raw pair outranks
+        // the stale reading the moment both parts are fresh, and the own fusion
+        // is seeded from the last fused pose, so the head does not jump.
         let mut handover_at = None;
         for step in 12..26 {
             let ts = step * NS / 10;
-            if step_game(&mut reader, SENSOR_GYROSCOPE, ts, &vec16(Vec3::ZERO)).is_some()
+            step_game(&mut reader, SENSOR_GYROSCOPE, ts, &vec16(Vec3::ZERO));
+            if step_game(&mut reader, SENSOR_ACCELEROMETER, ts, &glasses_flat()).is_some()
                 && handover_at.is_none()
             {
                 handover_at = Some(ts);
             }
-            step_game(&mut reader, SENSOR_ACCELEROMETER, ts, &glasses_flat());
         }
         let handover_at = handover_at.expect("the fusion never took over");
-        assert!(handover_at >= 3 * NS / 2, "handover at {handover_at}");
-        assert!(handover_at <= 8 * NS / 5, "handover at {handover_at}");
+        assert_eq!(handover_at, 6 * NS / 5, "handover at {handover_at}");
         is_close(head().unwrap().rotation, Quat::IDENTITY);
     }
 
