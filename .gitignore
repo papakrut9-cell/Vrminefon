@@ -1,0 +1,48 @@
+/.local/
+/game-files/
+/apk-assets/
+/target/
+**/__pycache__/
+*.py[cod]
+/.venv/
+# Downloaded/decompiled game content and private profiling artifacts.
+*.jar
+*.class
+*.jfr
+*.hprof
+/decompiled/
+/minecraft/
+/assets/
+/run/
+/logs/
+/dist/
+/mods/horizon/build/
+/saves/
+/backups/
+/tools/logs/
+.DS_Store
+# What the client writes to its working directory when run from the repo root.
+/options.txt
+/debug-profile.json
+/horizon.txt
+/horizon-graphics.txt
+/horizon-controller.txt
+/horizon-extras.txt
+/horizon-player.txt
+/servers.dat
+/screenshots/
+/.horizon-cache/
+/crash-reports/
+/debug/
+
+# Release-only compiled original exporter bundle.
+/exporters/
+
+# Android release signing keys: never commit.
+*.jks
+*.keystore
+# ...but the project's own public key (see ANDROID.md): same-signed updates.
+!packaging/android/horizon.keystore
+.horizon-keys/
+/mods/hello-android/target/
+/mods/hello-android/Cargo.lock

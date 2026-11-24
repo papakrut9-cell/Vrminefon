@@ -1,0 +1,99 @@
+name: android-apk
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.abi == 'arm64-v8a' && 'aarch64-linux-android' || 'x86_64-linux-android' }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Install Android SDK parts
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          # The runner ships the SDK; only cmdline-tools' bin is off PATH, and
+          # android-actions/setup-android@v3 fails at the long-removed "tools" package.
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -name sdkmanager -type f | sort -V | tail -n1)"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "platform-tools" > /dev/null
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$SDK/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Build the preparer
+        run: cargo build --release --locked -p horizon-prepare
+
+      - name: Download Mojang's pinned game files
+        run: ./packaging/android/fetch_game_files.sh game-files
+
+      - name: Prepare (compiles Horizon's Java exporters; only our classes leave)
+        run: |
+          target/release/horizon-prepare --prepare --root "$PWD" \
+            --version-json game-files/version.json \
+            --client-jar game-files/client.jar \
+            --libraries-dir game-files/libraries \
+            --server-jar game-files/server.jar
+
+      - name: Pack the derived resources into the APK
+        run: |
+          # The same pack the on-device derive would make (android_setup.rs reads it from
+          # assets/horizon-derived.zip), so first start needs no Java run on the device.
+          prepared=$(ls -d .local/horizon-client/* | head -1)
+          ./packaging/android/make_derived_pack.sh "$prepared" apk-assets/horizon-derived.zip
+
+      - name: Assemble the APK's on-device prepare assets
+        run: |
+          # Android arm64 Java 25 (OpenJDK, GPLv2 with the Classpath Exception) plus the
+          # NDK's libc++_shared.so, a fallback derive for phones without the pre-packed
+          # derived pack (crates/horizon-client/src/android_setup.rs); the x86_64 build
+          # (emulator) relies on the pack that ships inside the APK.
+          if [ "${{ matrix.abi }}" = arm64-v8a ]; then
+            mkdir -p apk-assets/horizon-jre
+            curl -fsSL https://github.com/AngelAuraMC/angelauramc-openjdk-build/releases/download/download/jre25-android-arm64.tar.xz \
+              | tar -xJf - -C apk-assets/horizon-jre
+            cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" \
+              apk-assets/horizon-jre/lib/
+          fi
+          # The preparer's root: the lock, the exporters' Java sources and the exporter
+          # classes this run compiled (the pinned jars never leave it).
+          mkdir -p apk-assets/horizon-prepare/exporters apk-assets/horizon-prepare/mods/horizon/src/test/java
+          bundle=$(target/release/horizon-prepare compile-exporters --root "$PWD" | tail -1)
+          cp -R "$bundle"/server "$bundle"/client "$bundle"/manifest.json apk-assets/horizon-prepare/exporters/
+          cp -R mods/horizon/src/test/java/dev apk-assets/horizon-prepare/mods/horizon/src/test/java/
+          cp research-lock.json apk-assets/horizon-prepare/
+
+      - name: Build the APK (release)
+        env:
+          HORIZON_APK_ASSETS: ${{ github.workspace }}/apk-assets
+          HORIZON_ABI: ${{ matrix.abi }}
+        run: PROFILE=release ./packaging/android/build_apk.sh
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: horizon-phonevr-apk-${{ matrix.abi }}
+          path: target/android/horizon.apk
+          if-no-files-found: error

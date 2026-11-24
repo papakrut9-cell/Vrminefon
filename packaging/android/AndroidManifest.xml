@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.horizonlab.horizon"
+    android:versionCode="81"
+    android:versionName="1.0.0">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- The launcher installs Horizon VR's updates (Updater.java). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Phone VR: the phone's gyroscope drives the in-game head. Cardboard-style SBS on screen. -->
+    <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
+    <!-- Bluetooth gamepads (Joy-Con pairs act as system HID gamepads). -->
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x400003" android:required="false" />
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:debuggable="false"
+        android:allowBackup="false"
+        android:hasCode="true"
+        android:extractNativeLibs="true"
+        android:largeHeap="true"
+        android:theme="@style/HorizonGame">
+
+        <profileable android:shell="true" />
+        <activity
+            android:name=".SetupActivity"
+            android:exported="true"
+            android:screenOrientation="fullUser"
+            android:configChanges="keyboardHidden|keyboard|navigation|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".HorizonActivity"
+            android:exported="false"
+            android:process=":game"
+            android:screenOrientation="sensorLandscape"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustNothing|stateHidden"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|smallestScreenSize|fontScale|locale|layoutDirection|touchscreen|mcc|mnc|colorMode|fontWeightAdjustment|grammaticalGender">
+            <meta-data android:name="android.app.lib_name" android:value="horizon" />
+        </activity>
+        <activity
+            android:name=".ProfileActivity"
+            android:exported="false"
+            android:theme="@style/HorizonProfile"
+            android:screenOrientation="fullUser"
+            android:configChanges="keyboardHidden|keyboard|navigation|uiMode"
+            android:windowSoftInputMode="adjustPan|stateHidden" />
+        <activity
+            android:name=".MsaLoginActivity"
+            android:exported="false"
+            android:theme="@style/HorizonProfile"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|smallestScreenSize"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".ModImportActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter android:label="Install mod">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
+            <intent-filter android:label="Install mod">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+            </intent-filter>
+            <!-- File managers that send any type: matched by the .hnmod / .hmod name. -->
+            <intent-filter android:label="Install mod">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.hnmod" />
+                <data android:pathPattern=".*\\..*\\.hnmod" />
+                <data android:pathPattern=".*\\.hmod" />
+                <data android:pathPattern=".*\\..*\\.hmod" />
+            </intent-filter>
+        </activity>
+        <service
+            android:name=".SetupService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <provider
+            android:name=".HorizonDocumentsProvider"
+            android:authorities="dev.horizonlab.horizon.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+    </application>
+</manifest>

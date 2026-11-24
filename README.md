@@ -1,2 +1,57 @@
-# Vrminefon
-Майнкрафт вр на телефон
+# Vrminefon — Minecraft Java VR на телефоне
+
+Нативный VR-клиент Minecraft: Java Edition 26.3, работающий **целиком на Android-телефоне**
+(без ПК и без Quest): SBS-стерео на экране телефона в Cardboard-очках, поворот головы по
+гироскопу телефона, Nintendo Switch Joy-Con в роли VR-контроллеров (по схеме, похожей на
+Driver4VR, — «виртуальные трекеры»).
+
+Проект форкнут с сохранением лицензий и атрибуции авторов:
+
+- [Horizon](https://github.com/horizon-rust/horizon) — Minecraft Java 26.3, переписанный на Rust (авторы Horizon, MIT).
+- [HorizonCraft-VR](https://github.com/Boboetto/HorizonCraft-VR) — VR-слой для Quest 3, по образцу
+  которого строится наш телефонный VR (адаптация: экран телефона + сенсоры вместо OpenXR).
+- Android-порт Horizon (Rayan-XOO/Starling) — NativeActivity, Vulkan, загрузка файлов игры в приложении.
+
+Это неофициальный фанатский проект, не связанный с Mojang и Microsoft. Нужна своя купленная
+копия Minecraft: Java Edition — APK не содержит файлов Minecraft.
+
+## Статус
+
+| Фаза | Что | Статус |
+| --- | --- | --- |
+| 0 | База: форк собирается, плоский APK на телефоне | готово (CI: android-apk.yml), APK сам готовит derived-пак |
+| A | SBS-стерео + голова по гироскопу телефона | начата: крейт `horizon-phonevr` (сенсор), рендер — дальше |
+| B | Joy-Con как контроллеры (движение, удары, блоки) | в плане |
+| C | Руки в VR по гироскопам Joy-Con (3DoF, стиль Driver4VR) | в плане |
+| D | Коррекция линз по Cardboard QR, панели меню в мире | в плане |
+
+Дизайн и точки интеграции: [docs/phonevr/PLAN.md](docs/phonevr/PLAN.md).
+Сборка APK локально: [ANDROID.md](ANDROID.md). CI собирает APK и выкладывает его артефактом.
+
+## Сборка APK локально (Linux)
+
+```sh
+rustup target add aarch64-linux-android
+cargo install cargo-ndk
+# Android SDK: cmdline-tools, затем
+sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "platform-tools"
+export ANDROID_HOME=~/android/sdk
+PROFILE=release ./packaging/android/build_apk.sh   # -> target/android/horizon.apk
+```
+
+APK подписан debug-ключом; ставится через `adb install -r` или открытием файла на телефоне
+(нужны Android 8.0+, arm64, желательно Android 11+ для Joy-Con по Bluetooth).
+
+## Первый запуск
+
+CI собирает APK с ассетами (`assets/horizon-derived.zip`, `assets/horizon-jre`,
+`assets/horizon-prepare`): внутри готовый derived-пак, собранный раннером, — а также JDK 25
+для Android arm64 и экспортеры Horizon как запасной путь (сами Mojang-файлы скачиваются с
+официальных серверов по SHA-1 пинам и не публикуются). Поэтому телефон сам делает setup без
+ПК: экран загрузки скачивает официальные файлы игры с Mojang (~525 МБ), распаковывает
+derived-пак из APK — и готово; если пака в APK нет, встроенная Java собирает его на телефоне
+(десятки минут, повторный запуск продолжает с места обрыва).
+
+Тот же CI собирает и x86_64-вариант (`horizon-phonevr-apk-x86_64`, arm64 —
+`horizon-phonevr-apk-arm64-v8a`) — для Android-эмулятора на ПК, им удобно проверять setup без
+телефона.
