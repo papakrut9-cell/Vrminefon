@@ -1,0 +1,76 @@
+package ru.vrminefon.bridge
+
+import android.Manifest
+import android.app.Activity
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Button
+
+class MainActivity : Activity() {
+    private lateinit var status: TextView
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, pad)
+        }
+        val title = TextView(this).apply {
+            text = "Joy-Con bridge"
+            textSize = 20f
+        }
+        status = TextView(this).apply { text = initialStatus() }
+        val start = Button(this).apply {
+            text = "Старт"
+            setOnClickListener { launch(); refresh() }
+        }
+        val stop = Button(this).apply {
+            text = "Стоп"
+            setOnClickListener { stopService(Intent(this@MainActivity, BridgeService::class.java)); refresh() }
+        }
+        box.addView(title)
+        box.addView(status)
+        box.addView(start)
+        box.addView(stop)
+        setContentView(box)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refresh()
+    }
+
+    private fun launch() {
+        startForegroundService(Intent(this, BridgeService::class.java))
+    }
+
+    private fun refresh() {
+        val gyro = (getSystemService(SENSOR_SERVICE) as android.hardware.SensorManager)
+            .getDefaultSensor(android.hardware.Sensor.TYPE_GYROSCOPE)
+        val gamepads = android.view.InputDevice.getDeviceIds()
+            .map { android.view.InputDevice.getDevice(it) }
+            .filterNotNull()
+            .filter {
+                it.sources and android.view.InputDevice.SOURCE_GAMEPAD != 0 ||
+                    it.sources and android.view.InputDevice.SOURCE_JOYSTICK != 0
+            }
+            .joinToString("; ") { it.name }
+        status.text = buildString {
+            appendLine("Гиросkop: ${if (gyro != null) "есть" else "нет"}")
+            appendLine("Геймпады: ${gamepads.ifEmpty { "нет (подари их в настройках Bluetooth)" }}")
+            appendLine("Сервис запускается кнопкой «Старт»; он держит поток позы, пока включён будильник-уведомление")
+        }
+    }
+
+    private fun initialStatus(): String = "..."
+}
