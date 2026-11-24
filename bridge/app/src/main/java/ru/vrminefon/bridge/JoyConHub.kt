@@ -48,15 +48,26 @@ object JoyConHub {
         ready = false
     }
 
+    @Synchronized
     fun refreshDevices() {
-        for (id in InputDevice.getDeviceIds()) {
+        // Re-attached or recharging Joy-Con come back with new device ids: drop
+        // the stale entries so the map cannot grow without bound over a session.
+        // @Synchronized is reentrant and attach() is called only from here and
+        // from behind this same object lock, so there is no lock-order cycle.
+        val live = HashSet<Int>(InputDevice.getDeviceIds().toList())
+        handByDevice.keys.retainAll(live)
+        for (id in live) {
             val device = InputDevice.getDevice(id) ?: continue
             attach(device)
         }
+        // A Joy-Con that unpaired must fall back to the idle pose instead of
+        // keeping the last IMU orientation for ever.
+        for (hand in arrayOf(left, right)) {
+            hand.alive = handByDevice.containsValue(hand)
+        }
     }
 
-    fun hand(deviceId: Int): Hand? = handByDevice[deviceId]
-
+    // Caller holds the object lock (refreshDevices or shutdown).
     private fun attach(device: InputDevice) {
         val name = device.name.lowercase()
         val hand = when {
@@ -78,14 +89,27 @@ object JoyConHub {
         }
     }
 
+    @Synchronized
     fun shutdown() {
+        unregisterHandSensors()
+        ready = false
+    }
+
+    /**
+     * Unregisters the fusion listeners from each device's SensorManager (the
+     * platform keeps one receiver per manager, so leaving them registered leaks
+     * the bridge's hold on the Joy-Con IMUs) and lets the next attach start a
+     * fresh registration. The object lock is reentrant, so shutdown() may hold
+     * it already.
+     */
+    @Synchronized
+    fun unregisterHandSensors() {
         for (hand in arrayOf(left, right)) {
             hand.sensorManager?.let { hand.fusion.stop(it) }
             hand.sensorManager = null
             hand.alive = false
         }
         handByDevice.clear()
-        ready = false
     }
 
     fun onKeyEvent(event: KeyEvent) {
@@ -113,13 +137,27 @@ object JoyConHub {
             else idle.copy(py = idle.py + 0.05f * phase)
         }
         val q = hand.fusion.quaternion()
+        // The hub's own last line of defence for Joy-Con hand poses: the
+        // fusion already repairs its state, but a NaN axis, an infinity or the
+        // zero quaternion (0, 0, 0, 0) must never reach the wire, or
+        // xrLocateViews fails with XR_ERROR_RUNTIME_FAILURE (black screen).
+        val qx: Float; val qy: Float; val qz: Float; val qw: Float
+        val n2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]
+        if (q[0].isFinite() && q[1].isFinite() && q[2].isFinite() && q[3].isFinite() &&
+            n2.isFinite() && n2 > 1e-12f
+        ) {
+            val n = kotlin.math.sqrt(n2)
+            qx = q[0] / n; qy = q[1] / n; qz = q[2] / n; qw = q[3] / n
+        } else {
+            qx = 0f; qy = 0f; qz = 0f; qw = 1f
+        }
         return RemoteProtocol.ControllerState(
-            qx = q[0], qy = q[1], qz = q[2], qw = q[3],
+            qx = qx, qy = qy, qz = qz, qw = qw,
             px = idle.px, py = idle.py, pz = idle.pz,
-            trigger = hand.trigger,
-            squeeze = hand.squeeze,
-            stickX = hand.stickX,
-            stickY = hand.stickY,
+            trigger = if (hand.trigger.isFinite()) hand.trigger else 0f,
+            squeeze = if (hand.squeeze.isFinite()) hand.squeeze else 0f,
+            stickX = if (hand.stickX.isFinite()) hand.stickX else 0f,
+            stickY = if (hand.stickY.isFinite()) hand.stickY else 0f,
             system = hand.system,
             a = hand.a,
             b = hand.b,

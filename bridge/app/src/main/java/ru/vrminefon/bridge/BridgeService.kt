@@ -45,9 +45,20 @@ class BridgeService : Service() {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         fusion.stop(sensorManager)
+        // Unregisters the per-device Joy-Con IMU listeners (the platform keeps a
+        // receiver per SensorManager, so a forgotten listener leaks it) and
+        // resets the hub, so a re-attached Joy-Con or a restarted service starts
+        // from a clean slate.
         JoyConHub.shutdown()
         protocol.close()
-        sender?.interrupt()
+        sender?.let {
+            it.interrupt()
+            // Wake the sender out of Thread.sleep(8) and give it a moment to
+            // leave before the process (and the socket) goes away.
+            runCatching { it.join(500) }
+        }
+        sender = null
+        connectedNow = false
         super.onDestroy()
     }
 
@@ -66,6 +77,8 @@ class BridgeService : Service() {
         val port = RemoteProtocol.PORT_DEFAULT
         if (!fusion.start(sensorManager)) {
             log("no gyro+accel pair, cannot drive the head")
+            // Unregister whatever half of the pair did register before stopping.
+            fusion.stop(sensorManager)
             stopSelf()
             return
         }
@@ -77,7 +90,14 @@ class BridgeService : Service() {
                 while (running) {
                     if (!protocol.connected && !protocol.connect(port)) {
                         log("runtime not reachable on $port, retrying")
-                        Thread.sleep(500)
+                        // Not sent yet: an interrupted sleep means stop, and a
+                        // retry loop must not keep unwinding all the way out.
+                        try {
+                            Thread.sleep(500)
+                        } catch (e: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            return@let
+                        }
                         continue
                     }
                     val q = fusion.quaternion()
@@ -95,6 +115,12 @@ class BridgeService : Service() {
                 }
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
+            } catch (e: Exception) {
+                // A sensor or socket surprise must not leave the bridge silently
+                // dead with the notification still up; log it and stop cleanly.
+                log("sender stopped: $e")
+                connectedNow = false
+                stopSelf()
             }
         }.also { it.start() }
     }
