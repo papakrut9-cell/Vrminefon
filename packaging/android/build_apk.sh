@@ -16,10 +16,14 @@ rm -rf "$OUT/stage" && mkdir -p "$OUT/stage/lib"
 cargo ndk -t "$ABI" -P 26 -o "$OUT/jni" build -p horizon-android --profile "$PROFILE" ${CARGO_FLAGS:-}
 mkdir -p "$OUT/stage/lib/$ABI"
 "$NDK"/toolchains/llvm/prebuilt/*/bin/llvm-strip -o "$OUT/stage/lib/$ABI/libhorizon.so" "$OUT/jni/$ABI/libhorizon.so"
-# VR: the Khronos OpenXR loader (org.khronos.openxr:openxr_loader_for_android), when
-# OPENXR_LOADER names its arm64 libopenxr_loader.so. Without it the game starts flat.
+# VR: the Khronos OpenXR loader, when OPENXR_LOADER names its libopenxr_loader.so. Without
+# it the game starts flat. Fallback: the loader binary checked into this repo (built from
+# OpenXR-SDK-Source's loader target; an OpenXR runtime on the device, e.g. Monado, is found
+# through the OpenXR Runtime Broker app).
 if [ -n "${OPENXR_LOADER:-}" ]; then
   cp "$OPENXR_LOADER" "$OUT/stage/lib/$ABI/libopenxr_loader.so"
+elif [ -f "packaging/android/openxr_loader/$ABI/libopenxr_loader.so" ]; then
+  cp "packaging/android/openxr_loader/$ABI/libopenxr_loader.so" "$OUT/stage/lib/$ABI/libopenxr_loader.so"
 fi
 # HorizonActivity (the soft keyboard bridge) -> classes.dex.
 rm -rf "$OUT/java" && mkdir -p "$OUT/java/classes" "$OUT/java/src/dev/horizonlab/horizon"
