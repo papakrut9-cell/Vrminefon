@@ -1,0 +1,67 @@
+name: bridge-apk
+
+# joycon-bridge (the Android app in bridge/) is its own Gradle project, separate
+# from the Rust horizon workspace android-apk.yml builds. It is tiny next to the
+# game APK, so it gets its own workflow and its own path filter: a change under
+# bridge/ rebuilds only this.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'bridge/**'
+      - '.github/workflows/bridge-apk.yml'
+  pull_request:
+    paths:
+      - 'bridge/**'
+      - '.github/workflows/bridge-apk.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: bridge-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # AGP 8.6 needs JDK 17 and runs on Gradle 8.12 (the wrapper's version).
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Install Android SDK parts
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          # The runner ships the SDK; only cmdline-tools' bin is off PATH, and
+          # android-actions/setup-android@v3 fails at the long-removed "tools" package.
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -name sdkmanager -type f | sort -V | tail -n1)"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+      - name: Build the bridge (debug)
+        working-directory: bridge
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Name the artifact after the app
+        run: |
+          cp bridge/app/build/outputs/apk/debug/app-debug.apk \
+             bridge/app/build/outputs/apk/debug/joycon-bridge-debug.apk
+          ls -l bridge/app/build/outputs/apk/debug/
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: joycon-bridge-debug
+          path: bridge/app/build/outputs/apk/debug/joycon-bridge-debug.apk
+          if-no-files-found: error
