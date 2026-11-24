@@ -80,9 +80,9 @@ class MainActivity : Activity() {
             .joinToString("; ") { it.name }
         status.text = buildString {
             appendLine("Runtime: ${if (BridgeService.connectedNow) "подключён" else "не подключён"}; пакетов: ${BridgeService.packetsSent}")
-            appendLine("Гиросkop: ${if (gyro != null) "есть" else "нет"}")
+            appendLine("Гироскоп: ${if (gyro != null) "есть" else "нет"}")
             appendLine("Геймпады: ${gamepads.ifEmpty { "нет (подари их в настройках Bluetooth)" }}")
-            appendLine("Сервис запускается кнопкой «Старт»; он держит поток позы, пока включён будильник-уведомление")
+            appendLine("«Старт» запускает поток позы в Monado; в шторке появится уведомление — так Android держит сервис живым")
         }
     }
 
