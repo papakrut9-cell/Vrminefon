@@ -20,6 +20,7 @@ class BridgeService : Service() {
     private val fusion = HeadFusion()
     private val protocol = RemoteProtocol()
     private var sender: Thread? = null
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
     @Volatile
     private var running = false
 
@@ -41,6 +42,8 @@ class BridgeService : Service() {
 
     override fun onDestroy() {
         running = false
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
         fusion.stop(sensorManager)
         protocol.close()
         sender?.interrupt()
@@ -65,27 +68,34 @@ class BridgeService : Service() {
             stopSelf()
             return
         }
+        val power = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        wakeLock = power.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "joycon-bridge:stream")
+        wakeLock?.acquire()
         sender = Thread {
-            while (running) {
-                if (!protocol.connected && !protocol.connect(port)) {
-                    log("runtime not reachable on $port, retrying")
-                    Thread.sleep(500)
-                    continue
+            try {
+                while (running) {
+                    if (!protocol.connected && !protocol.connect(port)) {
+                        log("runtime not reachable on $port, retrying")
+                        Thread.sleep(500)
+                        continue
+                    }
+                    val q = fusion.quaternion()
+                    val head = RemoteProtocol.HeadState(q[0], q[1], q[2], q[3])
+                    val t = (System.nanoTime() % 10_000_000_000L) / 1e9f
+                    val phase = sin(2f * Math.PI.toFloat() * t / 4f)
+                    val left = IDLE_LEFT.copy(py = IDLE_Y + 0.05f * phase)
+                    val right = IDLE_RIGHT.copy(px = IDLE_RIGHT.px + 0.05f * phase)
+                    if (protocol.send(head, left, right)) {
+                        packetsSent++
+                        connectedNow = true
+                    } else {
+                        protocol.close()
+                        connectedNow = false
+                    }
+                    Thread.sleep(SEND_INTERVAL_MS)
                 }
-                val q = fusion.quaternion()
-                val head = RemoteProtocol.HeadState(q[0], q[1], q[2], q[3])
-                val t = (System.nanoTime() % 10_000_000_000L) / 1e9f
-                val phase = sin(2f * Math.PI.toFloat() * t / 4f)
-                val left = IDLE_LEFT.copy(py = IDLE_Y + 0.05f * phase)
-                val right = IDLE_RIGHT.copy(px = IDLE_RIGHT.px + 0.05f * phase)
-                if (protocol.send(head, left, right)) {
-                    packetsSent++
-                    connectedNow = true
-                } else {
-                    protocol.close()
-                    connectedNow = false
-                }
-                Thread.sleep(SEND_INTERVAL_MS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
             }
         }.also { it.start() }
     }

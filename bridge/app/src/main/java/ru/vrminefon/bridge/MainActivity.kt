@@ -64,6 +64,13 @@ class MainActivity : Activity() {
     }
 
     private fun launch() {
+        val power = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        if (!power.isIgnoringBatteryOptimizations(packageName)) {
+            val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                android.net.Uri.parse("package:$packageName"))
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        }
         startForegroundService(Intent(this, BridgeService::class.java))
     }
 
