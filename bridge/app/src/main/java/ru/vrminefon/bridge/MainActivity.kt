@@ -33,30 +33,61 @@ class MainActivity : Activity() {
             text = "Стоп"
             setOnClickListener { stopService(Intent(this@MainActivity, BridgeService::class.java)); refresh() }
         }
+        val access = Button(this).apply {
+            text = "Дать Joy-Con доступ (спец-возможности)"
+            setOnClickListener { startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        }
         box.addView(title)
         box.addView(status)
         box.addView(start)
         box.addView(stop)
+        box.addView(access)
         setContentView(box)
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
+        requestBatteryExemption()
+    }
+
+    private val ticker = android.os.Handler(android.os.Looper.getMainLooper())
+    private val tick = object : Runnable {
+        override fun run() {
+            refresh()
+            ticker.postDelayed(this, 500)
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        refresh()
+        tick.run()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        ticker.removeCallbacks(tick)
+    }
+
+    private fun requestBatteryExemption() {
+        val power = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        if (!power.isIgnoringBatteryOptimizations(packageName)) {
+            val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                android.net.Uri.parse("package:$packageName"))
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        }
     }
 
     private fun launch() {
+        requestBatteryExemption()
         startForegroundService(Intent(this, BridgeService::class.java))
     }
 
     private fun refresh() {
         val gyro = (getSystemService(SENSOR_SERVICE) as android.hardware.SensorManager)
             .getDefaultSensor(android.hardware.Sensor.TYPE_GYROSCOPE)
+        JoyConHub.refreshDevices()
         val gamepads = android.view.InputDevice.getDeviceIds()
             .map { android.view.InputDevice.getDevice(it) }
             .filterNotNull()
@@ -65,10 +96,15 @@ class MainActivity : Activity() {
                     it.sources and android.view.InputDevice.SOURCE_JOYSTICK != 0
             }
             .joinToString("; ") { it.name }
+        val jcL = JoyConHub.left.alive
+        val jcR = JoyConHub.right.alive
+        val catcher = JoyConHub.ready
         status.text = buildString {
-            appendLine("Гиросkop: ${if (gyro != null) "есть" else "нет"}")
+            appendLine("Runtime: ${if (BridgeService.connectedNow) "подключён" else "не подключён"}; пакетов: ${BridgeService.packetsSent}")
+            appendLine("Joy-Con L: ${if (jcL) "есть" else "нет"} | R: ${if (jcR) "есть" else "нет"} | ловим кнопки: ${if (catcher) "да" else "включи внизу"}")
+            appendLine("Гироскоп: ${if (gyro != null) "есть" else "нет"}")
             appendLine("Геймпады: ${gamepads.ifEmpty { "нет (подари их в настройках Bluetooth)" }}")
-            appendLine("Сервис запускается кнопкой «Старт»; он держит поток позы, пока включён будильник-уведомление")
+            appendLine("«Старт» запускает поток позы в Monado; в шторке появится уведомление — так Android держит сервис живым")
         }
     }
 

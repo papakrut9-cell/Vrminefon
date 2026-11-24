@@ -66,19 +66,21 @@ class RemoteProtocol {
     }
 
     private fun putHead(b: java.nio.ByteBuffer, s: HeadState) {
+        val (hx, hy, hz, hw) = sanitize(s.qx, s.qy, s.qz, s.qw)
         for (i in 0..1) {
             val off = PACK_VIEWS[i]
             b.putFloat(off, FOV[0]).putFloat(off + 4, FOV[1])
             b.putFloat(off + 8, FOV[2]).putFloat(off + 12, FOV[3])
-            b.putFloat(off + 16, s.qx).putFloat(off + 20, s.qy)
-            b.putFloat(off + 24, s.qz).putFloat(off + 28, s.qw)
+            // Both eyes share one head orientation until IPD offsets land.
+            b.putFloat(off + 16, hx).putFloat(off + 20, hy)
+            b.putFloat(off + 24, hz).putFloat(off + 28, hw)
             b.putFloat(off + 32, 0f).putFloat(off + 36, 0f).putFloat(off + 40, 0f)
             b.putInt(off + 44, 0)
         }
-        b.putFloat(PACK_CENTER + 0, s.qx)
-        b.putFloat(PACK_CENTER + 4, s.qy)
-        b.putFloat(PACK_CENTER + 8, s.qz)
-        b.putFloat(PACK_CENTER + 12, s.qw)
+        b.putFloat(PACK_CENTER + 0, hx)
+        b.putFloat(PACK_CENTER + 4, hy)
+        b.putFloat(PACK_CENTER + 8, hz)
+        b.putFloat(PACK_CENTER + 12, hw)
         b.putFloat(PACK_CENTER + 16, 0f)
         b.putFloat(PACK_CENTER + 20, 0f)
         b.putFloat(PACK_CENTER + 24, 0f)
@@ -86,16 +88,20 @@ class RemoteProtocol {
     }
 
     private fun putController(b: java.nio.ByteBuffer, off: Int, c: ControllerState) {
-        b.putFloat(off + 0, c.qx).putFloat(off + 4, c.qy)
-        b.putFloat(off + 8, c.qz).putFloat(off + 12, c.qw)
-        b.putFloat(off + 16, c.px).putFloat(off + 20, c.py).putFloat(off + 24, c.pz)
+        val (qx, qy, qz, qw) = sanitize(c.qx, c.qy, c.qz, c.qw)
+        b.putFloat(off + 0, qx).putFloat(off + 4, qy)
+        b.putFloat(off + 8, qz).putFloat(off + 12, qw)
+        b.putFloat(off + 16, finiteOr(c.px, 0f))
+        b.putFloat(off + 20, finiteOr(c.py, 0f))
+        b.putFloat(off + 24, finiteOr(c.pz, 0f))
         b.putFloat(off + 28, 0f).putFloat(off + 32, 0f).putFloat(off + 36, 0f)
         b.putFloat(off + 40, 0f).putFloat(off + 44, 0f).putFloat(off + 48, 0f)
         for (i in 0..4) b.putFloat(off + 52 + 4 * i, 0f)
-        b.putFloat(off + 72, c.trigger)
-        b.putFloat(off + 76, c.squeeze)
+        b.putFloat(off + 72, finiteOr(c.trigger, 0f))
+        b.putFloat(off + 76, finiteOr(c.squeeze, 0f))
         b.putFloat(off + 80, 0f)
-        b.putFloat(off + 84, c.stickX).putFloat(off + 88, c.stickY)
+        b.putFloat(off + 84, finiteOr(c.stickX, 0f))
+        b.putFloat(off + 88, finiteOr(c.stickY, 0f))
         b.putFloat(off + 92, 0f)
         b.putFloat(off + 96, 0f).putFloat(off + 100, 0f)
         var bools = 0
@@ -135,6 +141,29 @@ class RemoteProtocol {
                 Math.toRadians(50.0).toFloat(),
                 Math.toRadians(-50.0).toFloat(),
             )
+
+        /**
+         * Last line of defence before the bytes hit the wire. The runtime fits
+         * a pose from every quaternion it reads, and NaN, an infinity or the
+         * zero quaternion (0, 0, 0, 0) is not a rotation: the fit fails and
+         * xrLocateViews answers XR_ERROR_RUNTIME_FAILURE, which is the black
+         * screen. The identity rotation stands in, since it is at least a valid
+         * pose; otherwise the quaternion is renormalised, which also repairs
+         * the drift of many accumulated gyro increments.
+         */
+        private fun sanitize(x: Float, y: Float, z: Float, w: Float): FloatArray {
+            if (!x.isFinite() || !y.isFinite() || !z.isFinite() || !w.isFinite()) {
+                return IDENTITY.copyOf()
+            }
+            val n2 = x * x + y * y + z * z + w * w
+            if (!(n2 > 1e-12f) || !n2.isFinite()) return IDENTITY.copyOf()
+            val n = kotlin.math.sqrt(n2)
+            return floatArrayOf(x / n, y / n, z / n, w / n)
+        }
+
+        private fun finiteOr(v: Float, fallback: Float): Float = if (v.isFinite()) v else fallback
+
+        private val IDENTITY = floatArrayOf(0f, 0f, 0f, 1f)
     }
 
     data class HeadState(val qx: Float, val qy: Float, val qz: Float, val qw: Float)

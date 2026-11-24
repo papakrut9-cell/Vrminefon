@@ -8,6 +8,7 @@ import android.content.Intent
 import android.hardware.SensorManager
 import android.os.IBinder
 import android.util.Log
+import kotlin.math.sin
 
 /**
  * Streams phone head pose (and later Joy-Con state) to Monado's remote
@@ -19,6 +20,7 @@ class BridgeService : Service() {
     private val fusion = HeadFusion()
     private val protocol = RemoteProtocol()
     private var sender: Thread? = null
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
     @Volatile
     private var running = false
 
@@ -40,9 +42,23 @@ class BridgeService : Service() {
 
     override fun onDestroy() {
         running = false
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
         fusion.stop(sensorManager)
+        // Unregisters the per-device Joy-Con IMU listeners (the platform keeps a
+        // receiver per SensorManager, so a forgotten listener leaks it) and
+        // resets the hub, so a re-attached Joy-Con or a restarted service starts
+        // from a clean slate.
+        JoyConHub.shutdown()
         protocol.close()
-        sender?.interrupt()
+        sender?.let {
+            it.interrupt()
+            // Wake the sender out of Thread.sleep(8) and give it a moment to
+            // leave before the process (and the socket) goes away.
+            runCatching { it.join(500) }
+        }
+        sender = null
+        connectedNow = false
         super.onDestroy()
     }
 
@@ -61,26 +77,58 @@ class BridgeService : Service() {
         val port = RemoteProtocol.PORT_DEFAULT
         if (!fusion.start(sensorManager)) {
             log("no gyro+accel pair, cannot drive the head")
+            // Unregister whatever half of the pair did register before stopping.
+            fusion.stop(sensorManager)
             stopSelf()
             return
         }
+        val power = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        wakeLock = power.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "joycon-bridge:stream")
+        wakeLock?.acquire()
         sender = Thread {
-            while (running) {
-                if (!protocol.connected && !protocol.connect(port)) {
-                    log("runtime not reachable on $port, retrying")
-                    Thread.sleep(500)
-                    continue
+            try {
+                while (running) {
+                    if (!protocol.connected && !protocol.connect(port)) {
+                        log("runtime not reachable on $port, retrying")
+                        // Not sent yet: an interrupted sleep means stop, and the
+                        // retry loop must not keep unwinding all the way out.
+                        if (!sleepUnlessStopped(SEND_RETRY_MS)) break
+                        continue
+                    }
+                    val q = fusion.quaternion()
+                    val head = RemoteProtocol.HeadState(q[0], q[1], q[2], q[3])
+                    val left = JoyConHub.compose(JoyConHub.left, IDLE_LEFT, mirrored = false)
+                    val right = JoyConHub.compose(JoyConHub.right, IDLE_RIGHT, mirrored = true)
+                    if (protocol.send(head, left, right)) {
+                        packetsSent++
+                        connectedNow = true
+                    } else {
+                        protocol.close()
+                        connectedNow = false
+                    }
+                    if (!sleepUnlessStopped(SEND_INTERVAL_MS)) break
                 }
-                val q = fusion.quaternion()
-                val head = RemoteProtocol.HeadState(q[0], q[1], q[2], q[3])
-                val none = IDLE_CONTROLLER
-                if (!protocol.send(head, none, none)) {
-                    protocol.close()
-                }
-                Thread.sleep(SEND_INTERVAL_MS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (e: Exception) {
+                // A sensor or socket surprise must not leave the bridge silently
+                // dead with the notification still up; log it and stop cleanly.
+                log("sender stopped: $e")
+                connectedNow = false
+                stopSelf()
             }
         }.also { it.start() }
     }
+
+    /** Sleeps the sender between packets; false means it was asked to stop. */
+    private fun sleepUnlessStopped(ms: Long): Boolean =
+        try {
+            Thread.sleep(ms)
+            running
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
 
     private fun log(message: String) {
         Log.i(TAG, message)
@@ -91,14 +139,25 @@ class BridgeService : Service() {
         private const val CHANNEL_ID = "bridge"
         private const val NOTIFICATION_ID = 1
         private const val SEND_INTERVAL_MS = 8L
-        private val IDLE_CONTROLLER = RemoteProtocol.ControllerState(
+        private const val SEND_RETRY_MS = 500L
+        private fun idleController(px: Float, py: Float) = RemoteProtocol.ControllerState(
             qx = 0f, qy = 0f, qz = 0f, qw = 1f,
-            px = 0.2f, py = -0.5f, pz = -0.2f,
+            px = px, py = py, pz = IDLE_Z,
             trigger = 0f, squeeze = 0f,
             stickX = 0f, stickY = 0f,
             system = false, a = false, b = false,
             triggerClick = false, stickClick = false,
             active = true,
         )
+
+        @Volatile
+        var connectedNow: Boolean = false
+        @Volatile
+        var packetsSent: Long = 0
+
+        private const val IDLE_Y = -0.15f
+        private const val IDLE_Z = -0.6f
+        private val IDLE_LEFT = idleController(-0.25f, IDLE_Y)
+        private val IDLE_RIGHT = idleController(0.25f, IDLE_Y)
     }
 }

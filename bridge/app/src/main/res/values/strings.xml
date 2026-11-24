@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="joycon_catcher_desc">Читает кнопки и стики Joy-Con, пока игра в VR на переднем плане; ничего не перехватывает и не блокирует.</string>
+    <string name="joycon_catcher_summary">Joy-Con → VR-контроллеры</string>
+</resources>
