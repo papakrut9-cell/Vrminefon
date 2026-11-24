@@ -33,10 +33,15 @@ class MainActivity : Activity() {
             text = "Стоп"
             setOnClickListener { stopService(Intent(this@MainActivity, BridgeService::class.java)); refresh() }
         }
+        val access = Button(this).apply {
+            text = "Дать Joy-Con доступ (спец-возможности)"
+            setOnClickListener { startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        }
         box.addView(title)
         box.addView(status)
         box.addView(start)
         box.addView(stop)
+        box.addView(access)
         setContentView(box)
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -82,6 +87,7 @@ class MainActivity : Activity() {
     private fun refresh() {
         val gyro = (getSystemService(SENSOR_SERVICE) as android.hardware.SensorManager)
             .getDefaultSensor(android.hardware.Sensor.TYPE_GYROSCOPE)
+        JoyConHub.refreshDevices()
         val gamepads = android.view.InputDevice.getDeviceIds()
             .map { android.view.InputDevice.getDevice(it) }
             .filterNotNull()
@@ -90,8 +96,12 @@ class MainActivity : Activity() {
                     it.sources and android.view.InputDevice.SOURCE_JOYSTICK != 0
             }
             .joinToString("; ") { it.name }
+        val jcL = JoyConHub.left.alive
+        val jcR = JoyConHub.right.alive
+        val catcher = JoyConHub.ready
         status.text = buildString {
             appendLine("Runtime: ${if (BridgeService.connectedNow) "подключён" else "не подключён"}; пакетов: ${BridgeService.packetsSent}")
+            appendLine("Joy-Con L: ${if (jcL) "есть" else "нет"} | R: ${if (jcR) "есть" else "нет"} | ловим кнопки: ${if (catcher) "да" else "включи внизу"}")
             appendLine("Гироскоп: ${if (gyro != null) "есть" else "нет"}")
             appendLine("Геймпады: ${gamepads.ifEmpty { "нет (подари их в настройках Bluetooth)" }}")
             appendLine("«Старт» запускает поток позы в Monado; в шторке появится уведомление — так Android держит сервис живым")

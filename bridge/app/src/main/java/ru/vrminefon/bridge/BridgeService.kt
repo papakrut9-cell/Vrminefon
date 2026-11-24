@@ -81,10 +81,8 @@ class BridgeService : Service() {
                     }
                     val q = fusion.quaternion()
                     val head = RemoteProtocol.HeadState(q[0], q[1], q[2], q[3])
-                    val t = (System.nanoTime() % 10_000_000_000L) / 1e9f
-                    val phase = sin(2f * Math.PI.toFloat() * t / 4f)
-                    val left = IDLE_LEFT.copy(py = IDLE_Y + 0.05f * phase)
-                    val right = IDLE_RIGHT.copy(px = IDLE_RIGHT.px + 0.05f * phase)
+                    val left = JoyConHub.compose(JoyConHub.left, IDLE_LEFT, mirrored = false)
+                    val right = JoyConHub.compose(JoyConHub.right, IDLE_RIGHT, mirrored = true)
                     if (protocol.send(head, left, right)) {
                         packetsSent++
                         connectedNow = true
