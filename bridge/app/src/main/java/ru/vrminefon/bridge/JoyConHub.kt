@@ -112,6 +112,9 @@ object JoyConHub {
         handByDevice.clear()
     }
 
+    /** The hand a device id belongs to, or null while no Joy-Con is attached. */
+    fun hand(deviceId: Int): Hand? = handByDevice[deviceId]
+
     fun onKeyEvent(event: KeyEvent) {
         val hand = hand(event.deviceId) ?: return
         if (event.repeatCount > 0) return

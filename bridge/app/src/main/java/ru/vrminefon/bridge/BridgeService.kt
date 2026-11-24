@@ -90,14 +90,9 @@ class BridgeService : Service() {
                 while (running) {
                     if (!protocol.connected && !protocol.connect(port)) {
                         log("runtime not reachable on $port, retrying")
-                        // Not sent yet: an interrupted sleep means stop, and a
+                        // Not sent yet: an interrupted sleep means stop, and the
                         // retry loop must not keep unwinding all the way out.
-                        try {
-                            Thread.sleep(500)
-                        } catch (e: InterruptedException) {
-                            Thread.currentThread().interrupt()
-                            return@let
-                        }
+                        if (!sleepUnlessStopped(SEND_RETRY_MS)) break
                         continue
                     }
                     val q = fusion.quaternion()
@@ -111,7 +106,7 @@ class BridgeService : Service() {
                         protocol.close()
                         connectedNow = false
                     }
-                    Thread.sleep(SEND_INTERVAL_MS)
+                    if (!sleepUnlessStopped(SEND_INTERVAL_MS)) break
                 }
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
@@ -125,6 +120,16 @@ class BridgeService : Service() {
         }.also { it.start() }
     }
 
+    /** Sleeps the sender between packets; false means it was asked to stop. */
+    private fun sleepUnlessStopped(ms: Long): Boolean =
+        try {
+            Thread.sleep(ms)
+            running
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+
     private fun log(message: String) {
         Log.i(TAG, message)
     }
@@ -134,6 +139,7 @@ class BridgeService : Service() {
         private const val CHANNEL_ID = "bridge"
         private const val NOTIFICATION_ID = 1
         private const val SEND_INTERVAL_MS = 8L
+        private const val SEND_RETRY_MS = 500L
         private fun idleController(px: Float, py: Float) = RemoteProtocol.ControllerState(
             qx = 0f, qy = 0f, qz = 0f, qw = 1f,
             px = px, py = py, pz = IDLE_Z,
