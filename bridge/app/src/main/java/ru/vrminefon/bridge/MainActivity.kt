@@ -43,6 +43,7 @@ class MainActivity : Activity() {
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
+        requestBatteryExemption()
     }
 
     private val ticker = android.os.Handler(android.os.Looper.getMainLooper())
@@ -63,7 +64,7 @@ class MainActivity : Activity() {
         ticker.removeCallbacks(tick)
     }
 
-    private fun launch() {
+    private fun requestBatteryExemption() {
         val power = getSystemService(POWER_SERVICE) as android.os.PowerManager
         if (!power.isIgnoringBatteryOptimizations(packageName)) {
             val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
@@ -71,6 +72,10 @@ class MainActivity : Activity() {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
         }
+    }
+
+    private fun launch() {
+        requestBatteryExemption()
         startForegroundService(Intent(this, BridgeService::class.java))
     }
 
