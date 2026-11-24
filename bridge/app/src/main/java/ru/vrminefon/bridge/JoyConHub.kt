@@ -1,6 +1,8 @@
 package ru.vrminefon.bridge
 
+import android.hardware.Sensor
 import android.hardware.SensorManager
+import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -69,8 +71,21 @@ object JoyConHub {
         hand.alive = true
         if (hand.sensorManager == null) {
             hand.sensorManager = device.sensorManager
+            val gyro = hand.sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE) != null
+            val accel = hand.sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null
+            Log.i("joycon-bridge", "Joy-Con ${if (hand === left) "L" else "R"} attached: imu gyro=$gyro accel=$accel")
             hand.sensorManager?.let { hand.fusion.start(it) }
         }
+    }
+
+    fun shutdown() {
+        for (hand in arrayOf(left, right)) {
+            hand.sensorManager?.let { hand.fusion.stop(it) }
+            hand.sensorManager = null
+            hand.alive = false
+        }
+        handByDevice.clear()
+        ready = false
     }
 
     fun onKeyEvent(event: KeyEvent) {

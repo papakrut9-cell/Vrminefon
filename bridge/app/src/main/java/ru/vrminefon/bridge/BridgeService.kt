@@ -45,6 +45,7 @@ class BridgeService : Service() {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         fusion.stop(sensorManager)
+        JoyConHub.shutdown()
         protocol.close()
         sender?.interrupt()
         super.onDestroy()
