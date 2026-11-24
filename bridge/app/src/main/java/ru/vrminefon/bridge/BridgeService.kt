@@ -8,6 +8,7 @@ import android.content.Intent
 import android.hardware.SensorManager
 import android.os.IBinder
 import android.util.Log
+import kotlin.math.sin
 
 /**
  * Streams phone head pose (and later Joy-Con state) to Monado's remote
@@ -73,8 +74,16 @@ class BridgeService : Service() {
                 }
                 val q = fusion.quaternion()
                 val head = RemoteProtocol.HeadState(q[0], q[1], q[2], q[3])
-                if (!protocol.send(head, IDLE_LEFT, IDLE_RIGHT)) {
+                val t = (System.nanoTime() % 10_000_000_000L) / 1e9f
+                val phase = sin(2f * Math.PI.toFloat() * t / 4f)
+                val left = IDLE_LEFT.copy(py = IDLE_Y + 0.05f * phase)
+                val right = IDLE_RIGHT.copy(px = IDLE_RIGHT.px + 0.05f * phase)
+                if (protocol.send(head, left, right)) {
+                    packetsSent++
+                    connectedNow = true
+                } else {
                     protocol.close()
+                    connectedNow = false
                 }
                 Thread.sleep(SEND_INTERVAL_MS)
             }
@@ -90,9 +99,9 @@ class BridgeService : Service() {
         private const val CHANNEL_ID = "bridge"
         private const val NOTIFICATION_ID = 1
         private const val SEND_INTERVAL_MS = 8L
-        private fun idleController(px: Float) = RemoteProtocol.ControllerState(
+        private fun idleController(px: Float, py: Float) = RemoteProtocol.ControllerState(
             qx = 0f, qy = 0f, qz = 0f, qw = 1f,
-            px = px, py = -0.5f, pz = -0.4f,
+            px = px, py = py, pz = IDLE_Z,
             trigger = 0f, squeeze = 0f,
             stickX = 0f, stickY = 0f,
             system = false, a = false, b = false,
@@ -100,7 +109,14 @@ class BridgeService : Service() {
             active = true,
         )
 
-        private val IDLE_LEFT = idleController(-0.35f)
-        private val IDLE_RIGHT = idleController(0.35f)
+        @Volatile
+        var connectedNow: Boolean = false
+        @Volatile
+        var packetsSent: Long = 0
+
+        private const val IDLE_Y = -0.15f
+        private const val IDLE_Z = -0.6f
+        private val IDLE_LEFT = idleController(-0.25f, IDLE_Y)
+        private val IDLE_RIGHT = idleController(0.25f, IDLE_Y)
     }
 }

@@ -45,9 +45,22 @@ class MainActivity : Activity() {
         }
     }
 
+    private val ticker = android.os.Handler(android.os.Looper.getMainLooper())
+    private val tick = object : Runnable {
+        override fun run() {
+            refresh()
+            ticker.postDelayed(this, 500)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
-        refresh()
+        tick.run()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        ticker.removeCallbacks(tick)
     }
 
     private fun launch() {
@@ -66,6 +79,7 @@ class MainActivity : Activity() {
             }
             .joinToString("; ") { it.name }
         status.text = buildString {
+            appendLine("Runtime: ${if (BridgeService.connectedNow) "подключён" else "не подключён"}; пакетов: ${BridgeService.packetsSent}")
             appendLine("Гиросkop: ${if (gyro != null) "есть" else "нет"}")
             appendLine("Геймпады: ${gamepads.ifEmpty { "нет (подари их в настройках Bluetooth)" }}")
             appendLine("Сервис запускается кнопкой «Старт»; он держит поток позы, пока включён будильник-уведомление")
