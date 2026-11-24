@@ -73,8 +73,7 @@ class BridgeService : Service() {
                 }
                 val q = fusion.quaternion()
                 val head = RemoteProtocol.HeadState(q[0], q[1], q[2], q[3])
-                val none = IDLE_CONTROLLER
-                if (!protocol.send(head, none, none)) {
+                if (!protocol.send(head, IDLE_LEFT, IDLE_RIGHT)) {
                     protocol.close()
                 }
                 Thread.sleep(SEND_INTERVAL_MS)
@@ -91,14 +90,17 @@ class BridgeService : Service() {
         private const val CHANNEL_ID = "bridge"
         private const val NOTIFICATION_ID = 1
         private const val SEND_INTERVAL_MS = 8L
-        private val IDLE_CONTROLLER = RemoteProtocol.ControllerState(
+        private fun idleController(px: Float) = RemoteProtocol.ControllerState(
             qx = 0f, qy = 0f, qz = 0f, qw = 1f,
-            px = 0.2f, py = -0.5f, pz = -0.2f,
+            px = px, py = -0.5f, pz = -0.4f,
             trigger = 0f, squeeze = 0f,
             stickX = 0f, stickY = 0f,
             system = false, a = false, b = false,
             triggerClick = false, stickClick = false,
             active = true,
         )
+
+        private val IDLE_LEFT = idleController(-0.35f)
+        private val IDLE_RIGHT = idleController(0.35f)
     }
 }
